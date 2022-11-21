@@ -1,0 +1,13 @@
+name = "NumericalRelaxation"
+uuid = "82303a6c-a702-44d7-938a-15dad61d8a03"
+authors = ["Maximilian Köhler <maximilian.koehler@ruhr-uni-bochum.de> and Timo Neumeier <timo.neumeier@math.uni-augsburg.de>"]
+version = "0.1.0"
+
+[compat]
+julia = "1.6"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
