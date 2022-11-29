@@ -1,10 +1,13 @@
 name = "NumericalRelaxation"
 uuid = "82303a6c-a702-44d7-938a-15dad61d8a03"
-authors = ["Maximilian Köhler <maximilian.koehler@ruhr-uni-bochum.de>",
-           "Timo Neumeier <timo.neumeier@math.uni-augsburg.de>",
-           "Jan Sebastian Melchior <Jan.Melchior-a1m@ruhr-uni-bochum.de>",
-           "Contributors"]
-version = "0.1.0"
+authors = ["Maximilian Köhler <maximilian.koehler@ruhr-uni-bochum.de>", "Timo Neumeier <timo.neumeier@math.uni-augsburg.de>", "Jan Sebastian Melchior <Jan.Melchior-a1m@ruhr-uni-bochum.de>", "Contributors"]
+version = "1.0.0"
+
+[deps]
+AbstractTrees = "1520ce14-60c1-5f80-bbc7-55ef81b5835c"
+Interpolations = "a98d9a8b-a2ab-59e6-89dd-64a1c18fca59"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Tensors = "48a634ad-e948-5137-8d70-aa71f2a747f4"
 
 [compat]
 julia = "1.7"
