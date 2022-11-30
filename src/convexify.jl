@@ -1,51 +1,50 @@
 @doc raw"""
-    Bartels1D{T<:Number} <: Convexification
+    GrahamScan{T<:Number} <: AbstractConvexification
 
 Datastructure that implements in `convexify` dispatch the discrete one-dimensional convexification of a line with actual deletion of memory.
 This results in a complexity of $\mathcal{O}(N)$. However, with additional costs due to the memory delete process.
 
 # Kwargs
-- `depth::Int = 0`
 - `δ::T = 0.01`
 - `start::T = 0.9`
 - `stop::T = 20.0`
 """
-Base.@kwdef struct Bartels1D{T<:Number} <: AbstractConvexification
+Base.@kwdef struct GrahamScan{T<:Number} <: AbstractConvexification
     δ::T = 0.01
     start::T = 0.9
     stop::T = 20.0
 end
 
-δ(s::Bartels1D) = s.δ
+δ(s::GrahamScan) = s.δ
 
-function build_buffer(convexification::Bartels1D)
+function build_buffer(convexification::GrahamScan{T}) where T
     basegrid_F = [Tensors.Tensor{2,1}((x,)) for x in range(convexification.start,convexification.stop,step=convexification.δ)]
-    basegrid_W = zeros(Float64,length(basegrid_F))
+    #basegrid_F = collect(range(convexification.start,convexification.stop,step=convexification.δ))
+    basegrid_W = zeros(T,length(basegrid_F))
     return ConvexificationBuffer1D(basegrid_F,basegrid_W)
 end
 
 @doc raw"""
-    convexify(F, material::Union{RelaxedDamage{basematerial,Bartels1D{T}},ReconvexifyDamage{basematerial,Bartels1D{T}}}, state) where {basematerial <: Hyperelasticity, T} -> W_convex::Float64, F⁻::Tensor{2,1}, F⁺::Tensor{2,1}
+    convexify(graham::GrahamScan{T2}, buffer::ConvexificationBuffer1D{T1,T2}, W::Function, F, xargs...) where {T1,T2}  -> W_convex::Float64, F⁻::Tensor{2,1}, F⁺::Tensor{2,1}
 Function that implements the convexification without deletion in $\mathcal{O}(N)$.
 """
-function convexify(F, material::Union{RelaxedDamage{basematerial,Bartels1D{T}},ReconvexifyDamage{basematerial,Bartels1D{T}}}, state) where {basematerial <: Hyperelasticity, T}
-    #init function values on coarse grid
-    interval = material.convexstrategy.start:material.convexstrategy.δ:material.convexstrategy.stop
-    for (i,F) in enumerate(interval)
-        state.convexificationbuffer.grid[i] = Tensor{2,1}((F,))
-        state.convexificationbuffer.values[i] = W_energy(state.convexificationbuffer.grid[i], material, state.damage)
+function convexify(graham::GrahamScan{T2}, buffer::ConvexificationBuffer1D{T1,T2}, W::Function, F::T1, xargs...) where {T1,T2}
+    #init buffer for new convexification run
+    for (i,F) in enumerate(graham.start:graham.δ:graham.stop)
+        buffer.grid[i] = T1(F)
+        buffer.values[i] = W(buffer.grid[i], xargs...)
     end
     #convexify
-    convexgrid_n = convexify_nondeleting!(state.convexificationbuffer.grid,state.convexificationbuffer.values)
+    convexgrid_n = convexify_nondeleting!(buffer.grid,buffer.values)
     # return W at F
-    id⁺ = findfirst(x -> x >= F, state.convexificationbuffer.grid[1:convexgrid_n])
-    id⁻ = findlast(x -> x <= F,  state.convexificationbuffer.grid[1:convexgrid_n])
+    id⁺ = findfirst(x -> x >= F, @view(buffer.grid[1:convexgrid_n]))
+    id⁻ = findlast(x -> x <= F,  @view(buffer.grid[1:convexgrid_n]))
     id⁺ == id⁻ ? (id⁻ -= 1) : nothing
     # reorder below to be agnostic w.r.t. tension and compression
-    support_points = [state.convexificationbuffer.grid[id⁺],state.convexificationbuffer.grid[id⁻]] #F⁺ F⁻ assumption
-    values_support_points = [state.convexificationbuffer.values[id⁺],state.convexificationbuffer.values[id⁻]] # W⁺ W⁻ assumption
+    support_points = [buffer.grid[id⁺],buffer.grid[id⁻]] #F⁺ F⁻ assumption
+    values_support_points = [buffer.values[id⁺],buffer.values[id⁻]] # W⁺ W⁻ assumption
     _perm = sortperm(values_support_points)
-    W_conv = values_support_points[_perm[1]] + ((values_support_points[_perm[2]] - values_support_points[_perm[1]])/(support_points[_perm[2]][1] - support_points[_perm[1]][1]))*(F[1] - support_points[_perm[1]][1])
+    W_conv = values_support_points[_perm[1]] + ((values_support_points[_perm[2]] - values_support_points[_perm[1]])/(support_points[_perm[2]] - support_points[_perm[1]]))*(F - support_points[_perm[1]])
     return W_conv, support_points[_perm[2]], support_points[_perm[1]]
 end
 
@@ -56,7 +55,7 @@ end
 ####################################################
 
 @doc raw"""
-        AdaptiveConvexification <: Convexification
+        AdaptiveGrahamScan <: AbstractConvexification
 
 struct that stores all relevant information for adaptive convexification.
 
@@ -74,9 +73,9 @@ struct that stores all relevant information for adaptive convexification.
 
 
 # Constructor
-    AdaptiveConvexification(interval; basegrid_numpoints=50, adaptivegrid_numpoints=115, exponent=5, distribution="fix", stepSizeIgnoreHessian=0.05, minPointsPerInterval=15, radius=3, minStepSize=0.03, forceAdaptivity=false)
+    AdaptiveGrahamScan(interval; basegrid_numpoints=50, adaptivegrid_numpoints=115, exponent=5, distribution="fix", stepSizeIgnoreHessian=0.05, minPointsPerInterval=15, radius=3, minStepSize=0.03, forceAdaptivity=false)
 """
-Base.@kwdef struct AdaptiveConvexification <: AbstractConvexification
+Base.@kwdef struct AdaptiveGrahamScan <: AbstractConvexification
     interval::Vector{Float64}
     basegrid_numpoints::Int64 = 50
     adaptivegrid_numpoints::Int64 = 115
@@ -89,9 +88,9 @@ Base.@kwdef struct AdaptiveConvexification <: AbstractConvexification
     forceAdaptivity::Bool = false
 end
 
-δ(s::AdaptiveConvexification) = step(range(s.interval[1],s.interval[2],length=s.adaptivegrid_numpoints))
+δ(s::AdaptiveGrahamScan) = step(range(s.interval[1],s.interval[2],length=s.adaptivegrid_numpoints))
 
-function build_buffer(ac::AdaptiveConvexification)
+function build_buffer(ac::AdaptiveGrahamScan)
     basegrid_F = [Tensors.Tensor{2,1}((x,)) for x in range(ac.interval[1],ac.interval[2],length=ac.basegrid_numpoints)]
     basegrid_W = zeros(Float64,ac.basegrid_numpoints)
     basegrid_∂²W = [Tensors.Tensor{4,1}((x,)) for x in zeros(Float64,ac.basegrid_numpoints)]
@@ -103,28 +102,28 @@ function build_buffer(ac::AdaptiveConvexification)
 end
 
 @doc raw"""
-    convexify(F, material::Union{RelaxedDamage{basematerial,AdaptiveConvexification},ReconvexifyDamage{basematerial,AdaptiveConvexification}}, state) where {basematerial <: Hyperelasticity}
-Function that implements the convexification with adpative grid, without deletion and in $\mathcal{O}(N)$ for each convexification grid.
+    convexify(adaptivegraham::AdaptiveGrahamScan{T2}, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::Function, F, xargs...) where {T1,T2}  -> W_convex::Float64, F⁻::Tensor{2,1}, F⁺::Tensor{2,1}
+Function that implements the convexification without deletion in $\mathcal{O}(N)$.
 """
-function convexify(F, material::Union{RelaxedDamage{basematerial,AdaptiveConvexification},ReconvexifyDamage{basematerial,AdaptiveConvexification}}, state) where {basematerial <: Hyperelasticity}
+function convexify(adaptivegraham::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::Function, F::T1, xargs...) where {T1,T2}
     #init function values **and grid** on coarse grid
-    state.convexificationbuffer.basebuffer.values .= [W_energy(x, material, state.damage) for x in state.convexificationbuffer.basebuffer.grid]
-    state.convexificationbuffer.basegrid_∂²W .= [Tensors.hessian(i->W_energy(i,material,state.damage), x) for x in state.convexificationbuffer.basebuffer.grid]
+    buffer.basebuffer.values .= [W(F, xargs...) for x in buffer.basebuffer.grid]
+    buffer.basegrid_∂²W .= [Tensors.hessian(i->W(i,xargs...), x) for x in buffer.basebuffer.grid]
 
     #construct adpative grid
-    adaptive_1Dgrid!(material.convexstrategy, state.convexificationbuffer)
+    adaptive_1Dgrid!(adaptivegraham, buffer)
     #init function values on adaptive grid
-    for (i,x) in enumerate(state.convexificationbuffer.adaptivebuffer.grid)
-        state.convexificationbuffer.adaptivebuffer.values[i] = W_energy(x, material, state.damage)
+    for (i,x) in enumerate(buffer.adaptivebuffer.grid)
+        buffer.adaptivebuffer.values[i] = W(x, xargs...)
     end
     #convexify
-    convexgrid_n = convexify_nondeleting!(state.convexificationbuffer.adaptivebuffer.grid,state.convexificationbuffer.adaptivebuffer.values)
+    convexgrid_n = convexify_nondeleting!(buffer.adaptivebuffer.grid,buffer.adaptivebuffer.values)
     # return W at F
-    id⁺ = findfirst(x -> x >= F, state.convexificationbuffer.adaptivebuffer.grid[1:convexgrid_n])
-    id⁻ = findlast(x -> x <= F,  state.convexificationbuffer.adaptivebuffer.grid[1:convexgrid_n]) 
+    id⁺ = findfirst(x -> x >= F, @view(buffer.adaptivebuffer.grid[1:convexgrid_n]))
+    id⁻ = findlast(x -> x <= F,  @view(buffer.adaptivebuffer.grid[1:convexgrid_n]))
     # reorder below to be agnostic w.r.t. tension and compression
-    support_points = [state.convexificationbuffer.adaptivebuffer.grid[id⁺],state.convexificationbuffer.adaptivebuffer.grid[id⁻]] #F⁺ F⁻ assumption
-    values_support_points = [state.convexificationbuffer.adaptivebuffer.values[id⁺],state.convexificationbuffer.adaptivebuffer.values[id⁻]] # W⁺ W⁻ assumption
+    support_points = [buffer.adaptivebuffer.grid[id⁺],buffer.adaptivebuffer.grid[id⁻]] #F⁺ F⁻ assumption
+    values_support_points = [buffer.adaptivebuffer.values[id⁺],buffer.adaptivebuffer.values[id⁻]] # W⁺ W⁻ assumption
     _perm = sortperm(values_support_points)
     W_conv = values_support_points[_perm[1]] + ((values_support_points[_perm[2]] - values_support_points[_perm[1]])/(support_points[_perm[2]][1] - support_points[_perm[1]][1]))*(F[1] - support_points[_perm[1]][1])
     return W_conv, support_points[_perm[2]], support_points[_perm[1]]
@@ -174,7 +173,7 @@ struct Polynomial{T1<:Union{Float64,Tensors.Tensor{2,1}}}
     c::T1
     d::T1
     e::T1
-    function Polynomial(F::T, ΔF::T, numpoints::Int, ac::AdaptiveConvexification) where {T}#exponent::Int, numpoints, distribution="fix", r=1.0, hₘᵢₙ=0.00001) where {T}
+    function Polynomial(F::T, ΔF::T, numpoints::Int, ac::AdaptiveGrahamScan) where {T}#exponent::Int, numpoints, distribution="fix", r=1.0, hₘᵢₙ=0.00001) where {T}
         if ac.distribution == "var"
             c = F
             b = one(T)* ac.minStepSize
@@ -197,7 +196,7 @@ struct Polynomial{T1<:Union{Float64,Tensors.Tensor{2,1}}}
 end
 
 @doc raw"""
-        function adaptive_1Dgrid!(ac::AdaptiveConvexification, ac_buffer::AdaptiveConvexificationBuffer1D{T1,T2,T3}) where {T1,T2,T3}
+        function adaptive_1Dgrid!(ac::AdaptiveGrahamScan, ac_buffer::AdaptiveConvexificationBuffer1D{T1,T2,T3}) where {T1,T2,T3}
             ...
             return  F⁺⁻
         end
@@ -215,7 +214,7 @@ points of non-convex subintervals will be stored. Additionally all minima of ∂
 as points of interest as well (only if step size at this point is greater than
 `ac.stepSizeIgnoreHessian`).
 """
-function adaptive_1Dgrid!(ac::AdaptiveConvexification, ac_buffer::AdaptiveConvexificationBuffer1D{T1,T2,T3}) where {T1,T2,T3}
+function adaptive_1Dgrid!(ac::AdaptiveGrahamScan, ac_buffer::AdaptiveConvexificationBuffer1D{T1,T2,T3}) where {T1,T2,T3}
     Fₕₑₛ = check_hessian(ac, ac_buffer)
     Fₛₗₚ = check_slope(ac_buffer)
     F⁺⁻ = combine(Fₛₗₚ, Fₕₑₛ)
@@ -223,17 +222,7 @@ function adaptive_1Dgrid!(ac::AdaptiveConvexification, ac_buffer::AdaptiveConvex
     return F⁺⁻
 end
 
-@doc raw"""
-        adaptive_1Dgrid!(material::Union{RelaxedDamage{basematerial,AdaptiveConvexification},ReconvexifyDamage{basematerial,AdaptiveConvexification}},state) where {basematerial <: Hyperelasticity}
-
-creates an adaptive grid based on data stored in `material.convexstrategy` and
-stores it in `state.convexificationbuffer`.
-"""
-function adaptive_1Dgrid!(mat::Union{RelaxedDamage{basematerial,AdaptiveConvexification},ReconvexifyDamage{basematerial,AdaptiveConvexification}},st) where {basematerial <: Hyperelasticity}
-    return adaptive_1Dgrid!(mat.convexstrategy,st.convexificationbuffer)
-end
-
-function check_hessian(∂²W::Vector{T2}, F::Vector{T1}, params::AdaptiveConvexification) where {T1,T2}
+function check_hessian(∂²W::Vector{T2}, F::Vector{T1}, params::AdaptiveGrahamScan) where {T1,T2}
     length(∂²W) == length(F) ? nothing : error("cannot process arguments of different length.")
     Fₕₑₛ = zeros(T1,0)
     for i in 2:length(∂²W)-1
@@ -244,7 +233,7 @@ function check_hessian(∂²W::Vector{T2}, F::Vector{T1}, params::AdaptiveConvex
     return Fₕₑₛ
 end
 
-function check_hessian(params::AdaptiveConvexification, ac_buffer::AdaptiveConvexificationBuffer1D)
+function check_hessian(params::AdaptiveGrahamScan, ac_buffer::AdaptiveConvexificationBuffer1D)
     return check_hessian(ac_buffer.basegrid_∂²W, ac_buffer.basebuffer.grid, params)
 end
 
@@ -391,7 +380,7 @@ function combine(X_slp::Array{T}, X_hes::Array{T},d=0.4::AbstractFloat) where {T
     end
 end
 
-function discretize_interval(Fₒᵤₜ::Array{T}, F⁺⁻::Array{T}, ac::AdaptiveConvexification) where {T}
+function discretize_interval(Fₒᵤₜ::Array{T}, F⁺⁻::Array{T}, ac::AdaptiveGrahamScan) where {T}
     if (length(F⁺⁻) > 2) || (ac.forceAdaptivity) # is function convex ?
         numIntervals = length(F⁺⁻)-1
         gridpoints_oninterval = Array{Int64}(undef,numIntervals)
@@ -422,7 +411,7 @@ function inv_m(mask::Array{T}) where {T}
     return ones(T,size(mask)) - mask
 end
 
-function distribute_gridpoints!(vecₒᵤₜ::Array, F⁺⁻::Array, ac::AdaptiveConvexification)
+function distribute_gridpoints!(vecₒᵤₜ::Array, F⁺⁻::Array, ac::AdaptiveGrahamScan)
     numIntervals = length(F⁺⁻)-1
     gridpoints_oninterval = copy(vecₒᵤₜ)
     if ac.distribution == "var"
@@ -487,7 +476,7 @@ function distribute_gridpoints!(vecₒᵤₜ::Array, F⁺⁻::Array, ac::Adaptiv
             norm_gridpoints_oninterval = gridpoints_oninterval./(sum(mask_active.*gridpoints_oninterval))
             norm_gridpoints_oninterval .*= mask_active
             active_points = ac.adaptivegrid_numpoints - 1 - sum(inv_m(mask_active).*gridpoints_oninterval)
-            gridpoints_oninterval = Int.(round.(inv_m(mask_active).*gridpoints_oninterval +     norm_gridpoints_oninterval*active_points))        
+            gridpoints_oninterval = Int.(round.(inv_m(mask_active).*gridpoints_oninterval +     norm_gridpoints_oninterval*active_points))
             # reduktion falls minimale Schrittweite*Stützpunkte > Intervallbreite
             for i in 1:length(gridpoints_oninterval)
                 maxnum = floor((F⁺⁻[i+1][1]-F⁺⁻[i][1])/ac.minStepSize)
@@ -566,7 +555,7 @@ function project(P::Polynomial, n)
 end
 
 """
-    build_buffer(convexstrategy::T) where T<:Convexification
+    build_buffer(convexstrategy::T) where T<:AbstractConvexification
 Maps a given convexification strategy `convexstrategy` to an associated buffer.
 """
 build_buffer
@@ -578,40 +567,40 @@ build_buffer
 ####################################################
 
 @doc raw"""
-    DeformationGrid{dimc,T,R}
+    GradientGrid{dimc,T,R<:AbstractRange{T}}
 Lightweight implementation of a structured convexification grid in multiple dimensions.
 Computes the requested convexification grid node adhoc and therefore is especially suited for threading (no cache misses).
 Implements the `Base.Iterator` interface and other `Base` functions such as, `length`,`size`,`getindex`,`lastindex`,`firstindex`,`eltype`,`axes`
 Within the parameterization `dimc` denote the convexification dimensions, `T` the used number type and `R` the number type of the `start`, `step` and `end` value of the axes ranges.
 
 # Constructor
-    DeformationGrid(axes::NTuple{dimc}) where dimc
-- `axes::StepRangeLen{T,R,R}` is a tuple of discretizations with the order of Tensor{2,2}([x1 y1;x2 y2]
+    GradientGrid(axes::NTuple{dimc,R}) where dimc
+- `axes::R` is a tuple of discretizations with the order of Tensor{2,2}([x1 y1;x2 y2])
 
 # Fields
-- `axes::NTuple{dimc,StepRangeLen{T,R,R}}`
+- `axes::NTuple{dimc,R}`
 - `indices::CartesianIndices{dimc,NTuple{dimc,Base.OneTo{Int64}}}`
 """
-struct DeformationGrid{dimc,T,R<:AbstractRange{T}}
+struct GradientGrid{dimc,T,R<:AbstractRange{T}}
     axes::NTuple{dimc,R}
     indices::CartesianIndices{dimc,NTuple{dimc,Base.OneTo{Int64}}}
 end
 
-function DeformationGrid(axes::NTuple{dimc}) where dimc
+function GradientGrid(axes::NTuple{dimc}) where dimc
     indices = CartesianIndices(ntuple(x->length(axes[x]),dimc))
-    return DeformationGrid(axes,indices)
+    return GradientGrid(axes,indices)
 end
 
-function Base.size(defogrid::DeformationGrid{dimc}, axes::Int) where dimc
+function Base.size(gradientgrid::GradientGrid{dimc}, axes::Int) where dimc
     @assert dimc ≥ axes
-    return length(defogrid.axes[axes])
+    return length(gradientgrid.axes[axes])
 end
 
-function Base.size(defogrid::DeformationGrid{dimc}) where dimc
-    NTuple{dimc,Int}(size(defogrid,dim) for dim in 1:dimc)
+function Base.size(gradientgrid::GradientGrid{dimc}) where dimc
+    NTuple{dimc,Int}(size(gradientgrid,dim) for dim in 1:dimc)
 end
 
-function Base.length(b::DeformationGrid{dimc}) where dimc
+function Base.length(b::GradientGrid{dimc}) where dimc
     _size::Int = size(b,1)
     for i in 2:dimc
         _size *= size(b,i)
@@ -619,33 +608,33 @@ function Base.length(b::DeformationGrid{dimc}) where dimc
     return _size
 end
 
-getindex_type(b::DeformationGrid{4,T}) where {T} = Tensor{2,2,T,4}
-getindex_type(b::DeformationGrid{9,T}) where {T} = Tensor{2,3,T,9}
+getindex_type(b::GradientGrid{4,T}) where {T} = Tensor{2,2,T,4}
+getindex_type(b::GradientGrid{9,T}) where {T} = Tensor{2,3,T,9}
 
-function Base.getindex(b::DeformationGrid{dimc,T},args...) where {dimc,T}
+function Base.getindex(b::GradientGrid{dimc,T},args...) where {dimc,T}
     @assert length(args) == dimc
     content = NTuple{dimc,T}(b.axes[x][args[x]] for x in 1:dimc)
     return getindex_type(b)(content)
 end
 
-function Base.getindex(b::DeformationGrid{dimc,T},idx) where {dimc,T}
+function Base.getindex(b::GradientGrid{dimc,T},idx) where {dimc,T}
     content = NTuple{dimc,T}(b.axes[x][idx[x]] for x in 1:dimc)
     return getindex_type(b)(content)
 end
 
-function Base.getindex(b::DeformationGrid{dimc,T},idx::Int) where {dimc,T}
+function Base.getindex(b::GradientGrid{dimc,T},idx::Int) where {dimc,T}
     ind = b.indices[idx]
     return b[ind]
 end
 
-Base.lastindex(b::DeformationGrid) = length(b)
-Base.firstindex(b::DeformationGrid) = 1
-Base.axes(b::DeformationGrid,d::Int) = Base.OneTo(length(b.axes[d]))
-Base.eltype(b::DeformationGrid) = getindex_type(b)
+Base.lastindex(b::GradientGrid) = length(b)
+Base.firstindex(b::GradientGrid) = 1
+Base.axes(b::GradientGrid,d::Int) = Base.OneTo(length(b.axes[d]))
+Base.eltype(b::GradientGrid) = getindex_type(b)
 
-Base.IteratorSize(b::DeformationGrid{dimc}) where {dimc} = Base.HasShape{dimc}()
+Base.IteratorSize(b::GradientGrid{dimc}) where {dimc} = Base.HasShape{dimc}()
 
-function Base.iterate(b::DeformationGrid, state=1)
+function Base.iterate(b::GradientGrid, state=1)
     if state <= length(b)
         return (b[state], state+1)
     else
@@ -653,93 +642,93 @@ function Base.iterate(b::DeformationGrid, state=1)
     end
 end
 
-δ(b::DeformationGrid{dimc,T}, axes::Int) where {dimc,T} = T(b.axes[axes].step)
-δ(b::DeformationGrid{dimc}) where {dimc} = minimum(ntuple(x->δ(b,x),dimc))
-center(b::DeformationGrid{dimc,T}) where {dimc,T} = getindex_type(b)(ntuple(x->radius(b,x)+b.axes[x][1], dimc))
-radius(b::DeformationGrid, axes::Int) = (b.axes[axes][end] - b.axes[axes][1])/2
-radius(b::DeformationGrid{dimc}) where {dimc} = maximum(ntuple(x->radius(b,x),dimc))
+δ(b::GradientGrid{dimc,T}, axes::Int) where {dimc,T} = T(b.axes[axes].step)
+δ(b::GradientGrid{dimc}) where {dimc} = minimum(ntuple(x->δ(b,x),dimc))
+center(b::GradientGrid{dimc,T}) where {dimc,T} = getindex_type(b)(ntuple(x->radius(b,x)+b.axes[x][1], dimc))
+radius(b::GradientGrid, axes::Int) = (b.axes[axes][end] - b.axes[axes][1])/2
+radius(b::GradientGrid{dimc}) where {dimc} = maximum(ntuple(x->radius(b,x),dimc))
 
-function inbounds(𝐱::Tensor{2,dimp,T},b::DeformationGrid{dimc,T}) where {dimp,dimc,T}
+function inbounds(𝐱::Tensor{2,dimp,T},b::GradientGrid{dimc,T}) where {dimp,dimc,T}
     inbound = ntuple(i->b.axes[i][1] ≤ 𝐱[i] ≤ b.axes[i][end],dimc)
     return all(inbound)
 end
 
 @doc raw"""
-    DeformationGridBuffered{dimc,T,dimp}
+    GradientGridBuffered{dimc,T,dimp}
 Heavyweight implementation of a structured convexification grid in multiple dimensions.
 Computes the requested convexification grid within the constructor and only accesses thereafter the `grid` field.
 Implements the `Base.Iterator` interface and other `Base` functions such as, `length`,`size`,`getindex`,`lastindex`,`firstindex`,`eltype`,`axes`
 Within the parameterization `dimc` denote the convexification dimensions, `T` the used number type and `dimp` the physical dimensions of the problem.
 
 # Constructor
-    DeformationGridBuffered(axes::NTuple{dimc}) where dimc
+    GradientGridBuffered(axes::NTuple{dimc}) where dimc
 - `axes::StepRangeLen{T,R,R}` is a tuple of discretizations with the order of Tensor{2,2}([x1 y1;x2 y2]
 
 # Fields
 - `grid::AbstractArray{Tensor{2,dimp,T,dimc},dimc} `
 - `indices::CartesianIndices{dimc,NTuple{dimc,Base.OneTo{Int64}}}`
 """
-struct DeformationGridBuffered{dimc,T,dimp}
+struct GradientGridBuffered{dimc,T,dimp}
     grid::AbstractArray{Tensor{2,dimp,T,dimc},dimc}
     indices::CartesianIndices{dimc,NTuple{dimc,Base.OneTo{Int64}}}
 end
 
-function DeformationGridBuffered(axes::NTuple{dimc}) where dimc
+function GradientGridBuffered(axes::NTuple{dimc}) where dimc
     indices = CartesianIndices(ntuple(x->length(axes[x]),dimc))
-    grid = collect(DeformationGrid(axes,indices))
-    return DeformationGridBuffered(grid,indices)
+    grid = collect(GradientGrid(axes,indices))
+    return GradientGridBuffered(grid,indices)
 end
 
-function DeformationGridBuffered(defomesh::DeformationGrid)
-    return DeformationGridBuffered(collect(defomesh),defomesh.indices)
+function GradientGridBuffered(defomesh::GradientGrid)
+    return GradientGridBuffered(collect(defomesh),defomesh.indices)
 end
 
-Base.size(defogrid::DeformationGridBuffered, axes::Int) = size(defogrid.grid,axes)
-Base.size(defogrid::DeformationGridBuffered) = size(defogrid.grid)
-Base.length(defogrid::DeformationGridBuffered) = length(defogrid.grid)
-Base.getindex(defogrid::DeformationGridBuffered, idx) = defogrid.grid[idx]
-Base.getindex(defogrid::DeformationGridBuffered, args...) = defogrid.grid[args...]
-Base.lastindex(defogrid::DeformationGridBuffered) = length(defogrid)
-Base.firstindex(defogrid::DeformationGridBuffered) = 1
-Base.axes(defogrid::DeformationGridBuffered,d::Int) = Base.axes(defogrid.grid,d)
-Base.eltype(defogrid::DeformationGridBuffered) = eltype(defogrid.grid)
-Base.IteratorSize(defogrid::DeformationGridBuffered) = Base.IteratorSize(defogrid.grid)
-Base.iterate(defomesh::DeformationGridBuffered, state=1) = Base.iterate(defomesh.grid,state)
+Base.size(gradientgrid::GradientGridBuffered, axes::Int) = size(gradientgrid.grid,axes)
+Base.size(gradientgrid::GradientGridBuffered) = size(gradientgrid.grid)
+Base.length(gradientgrid::GradientGridBuffered) = length(gradientgrid.grid)
+Base.getindex(gradientgrid::GradientGridBuffered, idx) = gradientgrid.grid[idx]
+Base.getindex(gradientgrid::GradientGridBuffered, args...) = gradientgrid.grid[args...]
+Base.lastindex(gradientgrid::GradientGridBuffered) = length(gradientgrid)
+Base.firstindex(gradientgrid::GradientGridBuffered) = 1
+Base.axes(gradientgrid::GradientGridBuffered,d::Int) = Base.axes(gradientgrid.grid,d)
+Base.eltype(gradientgrid::GradientGridBuffered) = eltype(gradientgrid.grid)
+Base.IteratorSize(gradientgrid::GradientGridBuffered) = Base.IteratorSize(gradientgrid.grid)
+Base.iterate(defomesh::GradientGridBuffered, state=1) = Base.iterate(defomesh.grid,state)
 
-δ(b::DeformationGridBuffered{dimc,T}, axes::Int) where {dimc,T} = T(round(b.grid[CartesianIndex(ntuple(x->2,dimc))][axes] - b.grid[CartesianIndex(ntuple(x->1,dimc))][axes],digits=1))
-δ(b::DeformationGridBuffered{dimc}) where {dimc} = minimum(ntuple(x->δ(b,x),dimc))
+δ(b::GradientGridBuffered{dimc,T}, axes::Int) where {dimc,T} = T(round(b.grid[CartesianIndex(ntuple(x->2,dimc))][axes] - b.grid[CartesianIndex(ntuple(x->1,dimc))][axes],digits=1))
+δ(b::GradientGridBuffered{dimc}) where {dimc} = minimum(ntuple(x->δ(b,x),dimc))
 
-function center(b::DeformationGridBuffered{dimc}) where dimc
+function center(b::GradientGridBuffered{dimc}) where dimc
     idx = ceil(Int,size(b,1)/2)
     return b.grid[CartesianIndex(ntuple(x->idx,dimc))]
 end
 
-radius(b::DeformationGridBuffered, axes::Int) = b.grid[end][axes] - center(b)[axes]
-radius(b::DeformationGridBuffered{dimc}) where {dimc} = maximum(ntuple(x->radius(b,x),dimc))
+radius(b::GradientGridBuffered, axes::Int) = b.grid[end][axes] - center(b)[axes]
+radius(b::GradientGridBuffered{dimc}) where {dimc} = maximum(ntuple(x->radius(b,x),dimc))
 
-function inbounds(𝐱::Tensor{2,dimp,T},b::DeformationGridBuffered{dimc,T}) where {dimp,dimc,T}
+function inbounds(𝐱::Tensor{2,dimp,T},b::GradientGridBuffered{dimc,T}) where {dimp,dimc,T}
     inbound = ntuple(i->b[1][i] ≤ 𝐱[i] ≤ b[end][i],dimc)
     return all(inbound)
 end
 
-function inbounds_𝐚(b::Union{DeformationGrid{dimc},DeformationGridBuffered{dimc}},𝐚) where {dimc}
+function inbounds_𝐚(b::Union{GradientGrid{dimc},GradientGridBuffered{dimc}},𝐚) where {dimc}
     _δ = δ(b) ##TODO
     dimp = isqrt(dimc)
     return ((norm(𝐚)≤(1+dimp*_δ)/_δ) && (𝐚⋅𝐚 ≥ (1-2*dimp)/_δ^2)) #TODO warum hier die norm ohne Wurzel?
 end
 
-function inbounds_𝐛(b::Union{DeformationGrid{dimc},DeformationGridBuffered{dimc}}, 𝐛) where {dimc}
+function inbounds_𝐛(b::Union{GradientGrid{dimc},GradientGridBuffered{dimc}}, 𝐛) where {dimc}
     _δ = δ(b) ##TODO
     r = radius(b) ##TODO welcher?
     dimp = isqrt(dimc)
     return _δ*norm(𝐛) ≤ 2*dimp*r+dimp*_δ # Hinterer Term nur im paper
 end
 
-𝐚_bounds(b::Union{DeformationGrid{dimc},DeformationGridBuffered{dimc}}) where {dimc} = floor(Int,(1+isqrt(dimc)*δ(b))/δ(b)) #TODO largest delta?
-𝐛_bounds(b::Union{DeformationGrid{dimc},DeformationGridBuffered{dimc}}) where {dimc} = floor(Int,2*isqrt(dimc)*radius(b)+isqrt(dimc)*δ(b)/δ(b))#TODO delta?
+𝐚_bounds(b::Union{GradientGrid{dimc},GradientGridBuffered{dimc}}) where {dimc} = floor(Int,(1+isqrt(dimc)*δ(b))/δ(b)) #TODO largest delta?
+𝐛_bounds(b::Union{GradientGrid{dimc},GradientGridBuffered{dimc}}) where {dimc} = floor(Int,2*isqrt(dimc)*radius(b)+isqrt(dimc)*δ(b)/δ(b))#TODO delta?
 
-getaxes(defomesh::DeformationGrid) = defomesh.axes
-function getaxes(defomesh::DeformationGridBuffered{dimc}) where dimc
+getaxes(defomesh::GradientGrid) = defomesh.axes
+function getaxes(defomesh::GradientGridBuffered{dimc}) where dimc
     start_ = defomesh[1]
     end_ = defomesh[end]
     step =  δ(defomesh)
@@ -754,14 +743,14 @@ abstract type RankOneDirections{dimp} end
 
 @doc raw"""
     ℛ¹Direction{dimp,dimc} <: RankOneDirections{dimp}
-Lightweight implementation that computes all rank-one directions within a `grid::DeformationGrid` adhoc.
+Lightweight implementation that computes all rank-one directions within a `grid::GradientGrid` adhoc.
 Therefore, also suited for threading purposes, since this avoids cache misses.
 Implements the `Base.Iterator` interface and other utility functions.
 Within the parameterization `dimp` and `dimc` denote the physical dimensions of the problem and the convexification dimensions, respectively.
 
 # Constructor
-    ℛ¹Direction(b::DeformationGrid)
-- `b::DeformationGrid` is a deformation grid discretization
+    ℛ¹Direction(b::GradientGrid)
+- `b::GradientGrid` is a deformation grid discretization
 
 # Fields
 - `a_axes::NTuple{dimp,UnitRange{Int}}`
@@ -777,10 +766,10 @@ end
 Base.eltype(b::ℛ¹Direction{dimp}) where dimp = Tuple{Vec{dimp,Int},Vec{dimp,Int}}
 Base.IteratorSize(d::ℛ¹Direction{dimp,dimc}) where {dimp,dimc} = Base.HasShape{dimc}()
 
-function ℛ¹Direction(b::DeformationGrid)
+function ℛ¹Direction(b::GradientGrid)
     a = 𝐚_bounds(b)
     b = 𝐛_bounds(b)
-    return ℛ¹Direction((-a:a,-a:a),(0:b,-b:b),CartesianIndices(((a*2+1),(a*2+1),b+1,(b*2+1)))) # wieso im code einmal 0:b?
+    return ℛ¹Direction((-a:a,-a:a),(0:b,-b:b),CartesianIndices(((a*2+1),(a*2+1),b+1,(b*2+1))))
 end
 
 function Base.size(d::ℛ¹Direction{dimp}, axes::Int) where dimp
@@ -829,7 +818,7 @@ end
 
 @doc raw"""
     ℛ¹DirectionBuffered{dimp,dimc,T} <: RankOneDirections{dimp}
-Heavyweight implementation that computes all rank-one directions within a `grid::DeformationGridBuffered` within the constructor.
+Heavyweight implementation that computes all rank-one directions within a `grid::GradientGridBuffered` within the constructor.
 Implements the `Base.Iterator` interface and other utility functions.
 Within the parameterization `dimp` and `dimc` denote the physical dimensions of the problem and the convexification dimensions, respectively.
 
@@ -847,97 +836,123 @@ end
 Base.iterate(d::ℛ¹DirectionBuffered, state=1) = Base.iterate(d.grid, state)
 
 @doc raw"""
-    PrincipalDamageDirections{dimp,T} <: RankOneDirections{dimp}
+    ParametrizedR1Directions{dimp,T} <: RankOneDirections{dimp}
 Direction datastructure that computes the reduced rank-one directions in the `dimp` physical dimensions and `dimp`² convexification dimensions.
 Implements the `Base.Iterator` interface and other utility functions.
 This datastructure only computes the first neighborhood rank-one directions and utilizes the symmetry of the `dimp`² dimensionality.
 Since they are quite small in 2² and 3² the directions are precomputed and stored in `dirs`.
 
 # Constructor
-    PrincipalDamageDirections(2)
-    PrincipalDamageDirections(3)
+    ParametrizedR1Directions(2)
+    ParametrizedR1Directions(3)
 
 # Fields
 - `dirs::Vector{Tuple{Vec{dimp,T},Vec{dimp,T}}}`
 """
-struct PrincipalDamageDirections{dimp,T} <: RankOneDirections{dimp}
+struct ParametrizedR1Directions{dimp,T} <: RankOneDirections{dimp}
     dirs::Vector{Tuple{Vec{dimp,T},Vec{dimp,T}}}
 end
 
-function PrincipalDamageDirections(::Val{2})
-    unsymmetric_dirs = [Vec{2}((1,1)),Vec{2}((1,0)),Vec{2}((0,1)),Vec{2}((0,-1)),Vec{2}((-1,0)),Vec{2}((-1,-1)),Vec{2}((1,-1)),Vec{2}((-1,1))]
-    symmetric_dirs = [Vec{2}((1,1)),Vec{2}((1,0)),Vec{2}((0,1)),Vec{2}((0,-1)),Vec{2}((1,-1))]
-    rankdirs = [(dir1,dir2) for dir1 in unsymmetric_dirs for dir2 in unsymmetric_dirs]
-    return PrincipalDamageDirections(rankdirs)
+function ParametrizedR1Directions(::Val{2})
+    rankdirs = Vector{Tuple{Vec{2,Int},Vec{2,Int}}}()
+    for i in -1:1, j in -1:1, m in 0:1, n in -1:1
+        if (i==j==0) || (m==n==0)
+            continue
+        else
+            push!(rankdirs,(Vec{2}((i,j)),Vec{2}((m,n))))
+        end
+    end
+    return ParametrizedR1Directions(rankdirs)
 end
 
-PrincipalDamageDirections(dimp::Int) = PrincipalDamageDirections(Val(dimp))
-PrincipalDamageDirections(defogrid::DeformationGrid{dimc}) where dimc = PrincipalDamageDirections(isqrt(dimc))
-Base.iterate(d::PrincipalDamageDirections, state=1) = Base.iterate(d.dirs, state)
+function ParametrizedR1Directions(::Val{3})
+    rankdirs = Vector{Tuple{Vec{3,Int},Vec{3,Int}}}()
+    for i in -1:1, j in -1:1, k in -1:1, l in 0:1, m in -1:1, n in -1:1
+        if (i==j==k==0) || (l==m==n==0)
+            continue
+        else
+            push!(rankdirs,(Vec{3}((i,j,k)),Vec{3}((l,m,n))))
+        end
+    end
+    return ParametrizedR1Directions(rankdirs)
+end
+
+ParametrizedR1Directions(dimp::Int) = ParametrizedR1Directions(Val(dimp))
+ParametrizedR1Directions(gradientgrid::GradientGrid{dimc}) where dimc = ParametrizedR1Directions(isqrt(dimc))
+Base.iterate(d::ParametrizedR1Directions, state=1) = Base.iterate(d.dirs, state)
 
 
 @doc raw"""
-    MultiDimConvexification{dimp,dimc,dirtype<:RankOneDirections{dimp},T1,T2,R,N} <: Convexification
-Datastructure that is used for the actual `material` struct as an equivalent to `Bartels1D` in the multidimensional relaxation setting.
+    R1Convexification{dimp,dimc,dirtype<:RankOneDirections{dimp},T1,T2,R} <: Convexification
+Datastructure that is used for the actual `material` struct as an equivalent to `GrahamScan` in the multidimensional relaxation setting.
 Bundles parallelization buffers, rank-one direction discretization as well as a tolerance and the convexification grid.
 # Constructor
-    MultiDimConvexification(axes_diag::AbstractRange,axes_off::AbstractRange;dirtype=ℛ¹Direction,dim=2,tol=1e-4)
+    R1Convexification(axes_diag::AbstractRange,axes_off::AbstractRange;dirtype=ℛ¹Direction,dim=2,tol=1e-4)
 
 # Fields
-- `grid::DeformationGrid{dimc,T1,R}`
+- `grid::GradientGrid{dimc,T1,R}`
 - `dirs::dirtype`
-- `buffer::Vector{ConvexificationThreadBuffer{T1,T2,dimp,N}}`
 - `tol::T1`
 """
-struct MultiDimConvexification{dimp,dimc,dirtype<:RankOneDirections{dimp},T1,T2,R,N} <: AbstractConvexification
-    grid::DeformationGrid{dimc,T1,R}
+struct R1Convexification{dimp,dimc,dirtype<:RankOneDirections{dimp},T,R} <: AbstractConvexification
+    grid::GradientGrid{dimc,T,R}
     dirs::dirtype
-    buffer::Vector{ConvexificationThreadBuffer{T1,T2,dimp,N}}
-    tol::T1
+    tol::T
 end
 
-function MultiDimConvexification(axes_diag::AbstractRange,axes_off::AbstractRange;dirtype=ℛ¹Direction,dim=2,tol=1e-4)
+function R1Convexification(axes_diag::AbstractRange,axes_off::AbstractRange;dirtype=ℛ¹Direction,dim=2,tol=1e-4)
     diag_indices = dim == 2 ? (1,4) : (1, 5, 9)
-    defogrid = DeformationGrid(ntuple(x->x in diag_indices ? axes_diag : axes_off,dim^2))
-    dirs = dirtype(defogrid)
-    _δ = δ(defogrid)
-    _r = radius(defogrid)
-    max_gx = ceil(Int,((2*_r))/_δ^3) + dim^2 # ^3 muss man irgendwie für dimp generalisieren
-    buffer = [ConvexificationThreadBuffer(dim,max_gx) for i in 1:Threads.nthreads()]
-    return MultiDimConvexification(defogrid,dirs,buffer,tol)
+    gradientgrid = GradientGrid(ntuple(x->x in diag_indices ? axes_diag : axes_off,dim^2))
+    dirs = dirtype(gradientgrid)
+    return R1Convexification(gradientgrid,dirs,tol)
+end
+
+function build_buffer(r1convexification::R1Convexification{dimp,dimc,dirtype,T}) where {dimp,dimc,dirtype,T}
+    gradientgrid = r1convexification.grid
+    _δ = δ(gradientgrid)
+    _r = radius(gradientgrid)
+    max_gx = ceil(Int,((2*_r))/_δ^3) + dimp^2
+    buffer = [R1ConvexificationThreadBuffer(dimp,max_gx) for i in 1:Threads.nthreads()]
+    W_rk1 = linear_interpolation(getaxes(gradientgrid),zeros(size(gradientgrid)),extrapolation_bc=Interpolations.Flat())
+    W_rk1_old = deepcopy(W_rk1)
+    diff_matrix = zero(W_rk1.itp.itp.coefs)
+    laminatetree = Dict{Int,LaminateTree{dimp,T,dimc}}()
+    return R1ConvexificationBuffer(buffer,W_rk1,W_rk1_old,diff_matrix,laminatetree)
 end
 
 @doc raw"""
-    convexify!(material::MultiDimRelaxedDamage,state::MultiDimRelaxedDamageTreeState)
+    convexify!(r1convexification::R1Convexification,r1buffer::R1ConvexificationBuffer,W::Function,xargs...;buildtree=true,maxk=20)
 Multi-dimensional parallelized implementation of the rank-one convexification.
 This dispatch stores the lamination tree in the convexification threading buffer and merges them after convergence to a single dictionary.
-Note that the interpolation objects within `state` are overwritten in this routine.
+Note that the interpolation objects within `r1buffer` are overwritten in this routine.
 """
-function convexify!(material::MultiDimRelaxedDamage,state::MultiDimRelaxedDamageTreeState)
-    defogrid = material.convexification.grid
-    directions = material.convexification.dirs
-    buffer = material.convexification.buffer
-    W_rk1_new = state.W_rk1_new
-    W_rk1_new.itp.itp.coefs .= [try (isnan(W_energy(F,material,state.damage)) ? 1000.0 : W_energy(F,material,state.damage)) catch DomainError 1000.0 end for F in defogrid]
-    W_rk1_old = state.W_rk1_old
-    diff = state.diff
+function convexify!(r1convexification::R1Convexification,r1buffer::R1ConvexificationBuffer,W::Function,xargs...;buildtree=false,maxk=20)
+    gradientgrid = r1convexification.grid
+    directions = r1convexification.dirs
+    W_rk1 = r1buffer.W_rk1
+    W_rk1.itp.itp.coefs .= [try (isnan(W(F,xargs...)) ? 1000.0 : W(F,xargs...)) catch DomainError 1000.0 end for F in gradientgrid]
+    W_rk1_old = r1buffer.W_rk1_old
+    diff = r1buffer.diff
+    copyto!(W_rk1_old.itp.itp.coefs,W_rk1.itp.itp.coefs)
     copyto!(diff,W_rk1_old.itp.itp.coefs)
-    _δ = δ(defogrid)
-    _r = radius(defogrid)
+    _δ = δ(gradientgrid)
+    _r = radius(gradientgrid)
     k = 1
-    phasestree = state.phasestree# init full tree
-    empty!(phasestree)
-    [empty!(b.partialphasestree) for b in buffer]
+    threadbuffer = r1buffer.threadbuffer
+    laminatetree = r1buffer.laminatetree# init full tree
+    empty!(laminatetree)
+    [empty!(b.partiallaminatetree) for b in r1buffer.threadbuffer]
 
-    while norm(diff, Inf) > material.convexification.tol
-        copyto!(W_rk1_old.itp.itp.coefs,W_rk1_new.itp.itp.coefs)
-        Threads.@threads for lin_ind_𝐅 in 1:length(defogrid)
-            𝐅 = defogrid[lin_ind_𝐅]
+    while norm(diff, Inf) > r1convexification.tol
+        copyto!(W_rk1_old.itp.itp.coefs,W_rk1.itp.itp.coefs)
+        Threads.@threads :static for lin_ind_𝐅 in 1:length(gradientgrid)
+            𝐅 = gradientgrid[lin_ind_𝐅]
             id = Threads.threadid()
-            g_fw = buffer[id].g_fw; g_bw = buffer[id].g_bw; X_fw = buffer[id].X_fw; X_bw = buffer[id].X_bw
-            X = buffer[id].X; g = buffer[id].g; h = buffer[id].h; y = buffer[id].y; partialphasestree = buffer[id].partialphasestree
+            g_fw = threadbuffer[id].g_fw; g_bw = threadbuffer[id].g_bw; X_fw = threadbuffer[id].X_fw; X_bw = threadbuffer[id].X_bw
+            X = threadbuffer[id].X; g = threadbuffer[id].g; h = threadbuffer[id].h; y = threadbuffer[id].y;
+            buildtree && (partiallaminatetree = threadbuffer[id].partiallaminatetree)
             for (𝐚,𝐛) in directions
-                if inbounds_𝐚(defogrid,𝐚) && inbounds_𝐛(defogrid,𝐛)
+                if inbounds_𝐚(gradientgrid,𝐚) && inbounds_𝐛(gradientgrid,𝐛)
                     𝐀 = _δ^3 * (𝐚 ⊗ 𝐛) # ^3 sollte für jede Dimension richtig sein
                     if norm(𝐀,Inf) > 0
                         ctr_fw = 0
@@ -950,7 +965,7 @@ function convexify!(material::MultiDimRelaxedDamage,state::MultiDimRelaxedDamage
                                 𝐱 = 𝐅 # init dir
                                 ell = 0 # start bei 0
                             end
-                            while inbounds(𝐱,defogrid)
+                            while inbounds(𝐱,gradientgrid)
                                 val = W_rk1_old(𝐱...)
                                 if dir == 1
                                     g_fw[ctr_fw+1] = val
@@ -969,24 +984,24 @@ function convexify!(material::MultiDimRelaxedDamage,state::MultiDimRelaxedDamage
                             concat!(g,g_fw,ctr_fw+1,g_bw,ctr_bw) # +1 ctr_fw wegen start bei 0
                             concat!(X,X_fw,ctr_fw+1,X_bw,ctr_bw) # +1 ctr_fw wegen start bei 0
                             g_ss, j = convexify!(g,X, ctr_bw+ctr_fw, h, y)
-                            if g_ss < W_rk1_new.itp.itp.coefs[lin_ind_𝐅]
-                                W_rk1_new.itp.itp.coefs[lin_ind_𝐅] = g_ss
-                                l₁ = y[j-1]
-                                l₂ = y[j]
-                                F¯ = 𝐅 + l₁*𝐀
-                                F⁺ = 𝐅 + l₂*𝐀
-                                W¯ = W_rk1_old(F¯...)
-                                W⁺ = W_rk1_old(F⁺...)
-                                phase = DamagePhase(F¯,F⁺,W¯,W⁺,𝐀,k)
-                                if k ≤ 20
-                                    if haskey(partialphasestree,𝐅) # check if thread phase tree has key 𝐅
-                                        if isassigned(partialphasestree[𝐅],k) # check if thread phase tree has already k-level phases
-                                            partialphasestree[𝐅][k] = phase
+                            if g_ss < W_rk1.itp.itp.coefs[lin_ind_𝐅]
+                                W_rk1.itp.itp.coefs[lin_ind_𝐅] = g_ss
+                                if k ≤ maxk && buildtree
+                                    l₁ = y[j-1]
+                                    l₂ = y[j]
+                                    F¯ = 𝐅 + l₁*𝐀
+                                    F⁺ = 𝐅 + l₂*𝐀
+                                    W¯ = W_rk1_old(F¯...)
+                                    W⁺ = W_rk1_old(F⁺...)
+                                    laminate = Laminate(F¯,F⁺,W¯,W⁺,𝐀,k)
+                                    if haskey(partiallaminatetree,lin_ind_𝐅) # check if thread laminate tree has key 𝐅
+                                        if isassigned(partiallaminatetree[lin_ind_𝐅],k) # check if thread laminate tree has already k-level laminates
+                                            partiallaminatetree[lin_ind_𝐅][k] = laminate
                                         else
-                                            push!(partialphasestree[𝐅].phases,phase)
+                                            push!(partiallaminatetree[lin_ind_𝐅].laminates,laminate)
                                         end
-                                    else # add key with current phases
-                                        partialphasestree[𝐅] = PhaseTree([phase])
+                                    else # add key with current laminates
+                                        partiallaminatetree[lin_ind_𝐅] = LaminateTree([laminate])
                                     end
                                 end
                             end
@@ -997,84 +1012,11 @@ function convexify!(material::MultiDimRelaxedDamage,state::MultiDimRelaxedDamage
                 end
             end
         end
-        diff .= W_rk1_new.itp.itp.coefs - W_rk1_old.itp.itp.coefs
+        diff .= W_rk1.itp.itp.coefs - W_rk1_old.itp.itp.coefs
         k += 1
     end
-    merge!(phasestree,getproperty.(buffer,:partialphasestree)...)
-end
-
-@doc raw"""
-    convexify!(material::MultiDimRelaxedDamage,state::MultiDimRelaxedDamageTreeState)
-Multi-dimensional parallelized implementation of the rank-one convexification.
-Note that the interpolation objects within `state` are overwritten in this routine.
-The lamination tree is discarded in this dispatch.
-"""
-function convexify!(material::MultiDimRelaxedDamage,state::MultiDimRelaxedDamageState)
-    defogrid = material.convexification.grid
-    directions = material.convexification.dirs
-    buffer = material.convexification.buffer
-    W_rk1_new = state.W_rk1_new
-    W_rk1_new.itp.itp.coefs .= W_energy.(defogrid,(material,),(state.damage,))
-    W_rk1_old = state.W_rk1_old
-    diff = state.diff
-    copyto!(diff,W_rk1_old.itp.itp.coefs)
-    _δ = δ(defogrid)
-    _r = radius(defogrid)
-    k = 1
-
-    while norm(diff, Inf) > material.convexification.tol
-        copyto!(W_rk1_old.itp.itp.coefs,W_rk1_new.itp.itp.coefs)
-        Threads.@threads for lin_ind_𝐅 in 1:length(defogrid)
-            𝐅 = defogrid[lin_ind_𝐅]
-            id = Threads.threadid()
-            g_fw = buffer[id].g_fw; g_bw = buffer[id].g_bw; X_fw = buffer[id].X_fw; X_bw = buffer[id].X_bw
-            X = buffer[id].X; g = buffer[id].g; h = buffer[id].h; y = buffer[id].y; partialphasestree = buffer[id].partialphasestree
-            for (𝐚,𝐛) in directions
-                if inbounds_𝐚(defogrid,𝐚) && inbounds_𝐛(defogrid,𝐛)
-                    𝐀 = _δ^3 * (𝐚 ⊗ 𝐛) # ^3 sollte für jede Dimension richtig sein
-                    if norm(𝐀,Inf) > 0
-                        ctr_fw = 0
-                        ctr_bw = 0
-                        for dir in (-1, 1)
-                            if dir==-1
-                                𝐱 = 𝐅 - 𝐀 # init dir
-                                ell = -1 # start bei -1, deswegen -𝐀
-                            else
-                                𝐱 = 𝐅 # init dir
-                                ell = 0 # start bei 0
-                            end
-                            while inbounds(𝐱,defogrid)
-                                val = W_rk1_old(𝐱...)
-                                if dir == 1
-                                    g_fw[ctr_fw+1] = val
-                                    X_fw[ctr_fw+1] = ell
-                                    ctr_fw += 1
-                                else
-                                    g_bw[ctr_bw+1] = val
-                                    X_bw[ctr_bw+1] = ell
-                                    ctr_bw += 1
-                                end
-                                𝐱 += dir*𝐀
-                                ell += dir
-                            end
-                        end
-                        if ((ctr_fw > 0) && (ctr_bw > 0))
-                            concat!(g,g_fw,ctr_fw+1,g_bw,ctr_bw) # +1 ctr_fw wegen start bei 0
-                            concat!(X,X_fw,ctr_fw+1,X_bw,ctr_bw) # +1 ctr_fw wegen start bei 0
-                            g_ss, j = convexify!(g,X, ctr_bw+ctr_fw, h, y)
-                            if g_ss < W_rk1_new.itp.itp.coefs[lin_ind_𝐅]
-                                W_rk1_new.itp.itp.coefs[lin_ind_𝐅] = g_ss
-                            end
-                        end
-                    end
-                else
-                    continue
-                end
-            end
-        end
-        diff .= W_rk1_new.itp.itp.coefs - W_rk1_old.itp.itp.coefs
-        k += 1
-    end
+    buildtree && merge!(laminatetree,getproperty.(r1buffer.threadbuffer,:partiallaminatetree)...)
+    nothing
 end
 
 @doc raw"""
