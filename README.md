@@ -15,3 +15,12 @@ The implemented methods are research results from the following papers:
 
 If you use one-dimensional convexification procedures, please cite the prior.
 In case you want to use rank-one convexification refer to the second paper.
+
+## Acknowledgement
+
+This code is a result of the [SPP 2256 Project Group 2](https://spp2256.ur.de/research/members-2020/2023).
+We acknowledge the Deutsche Forschungsgemeinschaft (DFG) for funding within the Priority
+Program 2256 ("Variational Methods for Predicting Complex Phenomena in Engineering Structures and Materials"),
+project ID 441154176, reference ID BA2823/17-1.
+
+![spp-logo](docs/assets/spp-logo.png)

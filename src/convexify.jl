@@ -913,7 +913,7 @@ function build_buffer(r1convexification::R1Convexification{dimp,dimc,dirtype,T})
     _r = radius(gradientgrid)
     max_gx = ceil(Int,((2*_r))/_δ^3) + dimp^2
     buffer = [R1ConvexificationThreadBuffer(dimp,max_gx) for i in 1:Threads.nthreads()]
-    W_rk1 = LinearInterpolation(getaxes(gradientgrid),zeros(size(gradientgrid)),extrapolation_bc=Interpolations.Flat())
+    W_rk1 = linear_interpolation(getaxes(gradientgrid),zeros(size(gradientgrid)),extrapolation_bc=Interpolations.Flat())
     W_rk1_old = deepcopy(W_rk1)
     diff_matrix = zero(W_rk1.itp.itp.coefs)
     laminatetree = Dict{Int,LaminateTree{dimp,T,dimc}}()
@@ -921,18 +921,19 @@ function build_buffer(r1convexification::R1Convexification{dimp,dimc,dirtype,T})
 end
 
 @doc raw"""
-    convexify!(r1convexification::R1Convexification,r1buffer::R1ConvexificationBuffer,W::Function,xargs...;buildtree=true)
+    convexify!(r1convexification::R1Convexification,r1buffer::R1ConvexificationBuffer,W::Function,xargs...;buildtree=true,maxk=20)
 Multi-dimensional parallelized implementation of the rank-one convexification.
 This dispatch stores the lamination tree in the convexification threading buffer and merges them after convergence to a single dictionary.
-Note that the interpolation objects within `state` are overwritten in this routine.
+Note that the interpolation objects within `r1buffer` are overwritten in this routine.
 """
-function convexify!(r1convexification::R1Convexification,r1buffer::R1ConvexificationBuffer,W::Function,xargs...;buildtree=false)
+function convexify!(r1convexification::R1Convexification,r1buffer::R1ConvexificationBuffer,W::Function,xargs...;buildtree=false,maxk=20)
     gradientgrid = r1convexification.grid
     directions = r1convexification.dirs
     W_rk1 = r1buffer.W_rk1
     W_rk1.itp.itp.coefs .= [try (isnan(W(F,xargs...)) ? 1000.0 : W(F,xargs...)) catch DomainError 1000.0 end for F in gradientgrid]
     W_rk1_old = r1buffer.W_rk1_old
     diff = r1buffer.diff
+    copyto!(W_rk1_old.itp.itp.coefs,W_rk1.itp.itp.coefs)
     copyto!(diff,W_rk1_old.itp.itp.coefs)
     _δ = δ(gradientgrid)
     _r = radius(gradientgrid)
@@ -944,7 +945,7 @@ function convexify!(r1convexification::R1Convexification,r1buffer::R1Convexifica
 
     while norm(diff, Inf) > r1convexification.tol
         copyto!(W_rk1_old.itp.itp.coefs,W_rk1.itp.itp.coefs)
-        Threads.@threads for lin_ind_𝐅 in 1:length(gradientgrid)
+        Threads.@threads :static for lin_ind_𝐅 in 1:length(gradientgrid)
             𝐅 = gradientgrid[lin_ind_𝐅]
             id = Threads.threadid()
             g_fw = threadbuffer[id].g_fw; g_bw = threadbuffer[id].g_bw; X_fw = threadbuffer[id].X_fw; X_bw = threadbuffer[id].X_bw
@@ -985,7 +986,7 @@ function convexify!(r1convexification::R1Convexification,r1buffer::R1Convexifica
                             g_ss, j = convexify!(g,X, ctr_bw+ctr_fw, h, y)
                             if g_ss < W_rk1.itp.itp.coefs[lin_ind_𝐅]
                                 W_rk1.itp.itp.coefs[lin_ind_𝐅] = g_ss
-                                if k ≤ 20 && buildtree
+                                if k ≤ maxk && buildtree
                                     l₁ = y[j-1]
                                     l₂ = y[j]
                                     F¯ = 𝐅 + l₁*𝐀

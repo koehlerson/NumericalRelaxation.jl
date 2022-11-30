@@ -112,7 +112,7 @@ struct R1ConvexificationThreadBuffer{T1,T2,dimp,N}
     X::Vector{T2}
     h::Vector{T1}
     y::Vector{T2}
-    partiallaminatestree::Dict{Int,LaminateTree{dimp,T1,N}}
+    partiallaminatetree::Dict{Int,LaminateTree{dimp,T1,N}}
 end
 
 function R1ConvexificationThreadBuffer(dim::Int,max_gx::Int,T1=Float64,T2=Int)
@@ -120,12 +120,12 @@ function R1ConvexificationThreadBuffer(dim::Int,max_gx::Int,T1=Float64,T2=Int)
     X_fw = zeros(T2,max_gx);  X_bw = zeros(T2,max_gx)
     X = zeros(T2,max_gx);     g = zeros(T1,max_gx)
     y = zeros(T2,max_gx);     h = zeros(T1,max_gx)
-    partiallaminatestree = Dict{Int,LaminateTree{dim,T1,dim^2}}()
-    return R1ConvexificationThreadBuffer(g_fw, g_bw, X_fw, X_bw, g, X, h, y, partiallaminatestree)
+    partiallaminatetree = Dict{Int,LaminateTree{dim,T1,dim^2}}()
+    return R1ConvexificationThreadBuffer(g_fw, g_bw, X_fw, X_bw, g, X, h, y, partiallaminatetree)
 end
 
 struct R1ConvexificationBuffer{T1,T2,dimp,dimc,N,ITP<:Interpolations.AbstractInterpolation} <: AbstractConvexificationBuffer
-    threadbuffer::R1ConvexificationThreadBuffer{T1,T2,dimp,N}
+    threadbuffer::Vector{R1ConvexificationThreadBuffer{T1,T2,dimp,N}}
     W_rk1::ITP
     W_rk1_old::ITP
     diff::Array{T1,dimc}

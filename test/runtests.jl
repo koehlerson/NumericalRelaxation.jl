@@ -5,6 +5,9 @@ using Test
 W(F::Number,x1=2,x2=6) = (F-1)^x1 * (42 + 77*F + 15*F^x1 - 102.5*F^3 + 58.89*F^4 - 12.89*F^5 + F^x2)
 W(F::Tensor{2,1},x1=2,x2=6) = W(F[1],x1,x2)
 
+W_multi(F::Tensor{2,dim}) where dim = (norm(F)-1)^2
+W_multi_rc(F::Tensor{2,dim}) where dim = norm(F) ≤ 1 ? 0.0 : (norm(F)-1)^2
+
 @testset "Equidistant Graham Scan" begin
     convexification = GrahamScan(start=0.01,stop=5.0,δ=0.01)
     buffer = build_buffer(convexification) 
@@ -104,6 +107,23 @@ end
     @test(@inferred Union{Nothing,Tuple{Tuple{Vec{2,Int},Vec{2,Int}},Int}} Base.iterate(dirs,1) == ((Vec{2}((-1,-1)),Vec{2}((0,-1))),2))
     ((𝐚,𝐛),i) = Base.iterate(dirs,1)
     @test @inferred(NumericalRelaxation.inbounds_𝐚(gradientgrid1,𝐚)) && @inferred(NumericalRelaxation.inbounds_𝐛(gradientgrid1,𝐛))
+end
+
+@testset "R1Convexification" begin
+    d = 2
+    a = -2.0:0.5:2.0
+    r1convexification_reduced = R1Convexification(a,a,dim=d,dirtype=ParametrizedR1Directions)
+    buffer_reduced = build_buffer(r1convexification_reduced)
+    convexify!(r1convexification_reduced,buffer_reduced,W_multi;buildtree=true)
+    @test all(isapprox.(buffer_reduced.W_rk1.itp.itp.coefs .- [W_multi_rc(Tensor{2,2}((x1,x2,y1,y2))) for x1 in a, x2 in a, y1 in a, y2 in a],0.0,atol=1e-8))
+    r1convexification_full = R1Convexification(a,a,dim=d,dirtype=ℛ¹Direction)
+    buffer_full = build_buffer(r1convexification_full)
+    convexify!(r1convexification_full,buffer_full,W_multi;buildtree=false)
+    @test all(isapprox.(buffer_full.W_rk1.itp.itp.coefs .- [W_multi_rc(Tensor{2,2}((x1,x2,y1,y2))) for x1 in a, x2 in a, y1 in a, y2 in a],0.0,atol=1e-8))
+    @test all(isapprox.(buffer_full.W_rk1.itp.itp.coefs .- buffer_reduced.W_rk1.itp.itp.coefs ,0.0,atol=1e-8))
+    # test if subsequent convexifications work
+    convexify!(r1convexification_full,buffer_full,W_multi;buildtree=true)
+    @test all(isapprox.(buffer_full.W_rk1.itp.itp.coefs .- buffer_reduced.W_rk1.itp.itp.coefs ,0.0,atol=1e-8))
 end
 
 @testset "Adaptive Convexification" begin
