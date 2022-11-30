@@ -124,6 +124,19 @@ end
     # test if subsequent convexifications work
     convexify!(r1convexification_full,buffer_full,W_multi;buildtree=true)
     @test all(isapprox.(buffer_full.W_rk1.itp.itp.coefs .- buffer_reduced.W_rk1.itp.itp.coefs ,0.0,atol=1e-8))
+
+    @testset "Tree Construction" begin
+        F1 = Tensor{2,2}((0.1,0.0,0.0,0.0))
+        F2 = Tensor{2,2}((0.1,0.5,0.3,0.2))
+        F3 = Tensor{2,2}((0.5,0.5,0.0,0.0))
+        for F in (F1,F2,F3)
+            flt = FlexibleLaminateTree(F,r1convexification_full,buffer_full,3)
+            @test NumericalRelaxation.checkintegrity(flt,buffer_full.W_rk1)
+            𝔸, 𝐏, W = NumericalRelaxation.eval(flt,W_multi)
+            @test W == 0.0
+            @test 𝐏 == zero(Tensor{2,2})
+        end
+    end
 end
 
 @testset "Adaptive Convexification" begin

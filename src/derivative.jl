@@ -100,7 +100,7 @@ function FlexibleLaminateTree(F::Tensor{2,dim,T,N},r1convexification::R1Convexif
     while !isempty(laminates)
         lc,parent = pop!(laminates)
         if lc isa Laminate
-            ξ = (norm(parent.F,1) - norm(lc.F¯,1))/(norm(lc.F⁺,1) - norm(lc.F¯,1)) #TODO fix me
+            ξ = (norm(parent.F - lc.F¯,1))/(norm(lc.F⁺ - lc.F¯,1)) #TODO fix me
             #isnan(ξ) && continue
             push!(parent.children, FlexibleLaminateTree(lc.F¯, lc.W¯, (1.0-ξ), lc.k))
             push!(parent.children, FlexibleLaminateTree(lc.F⁺, lc.W⁺, ξ, lc.k))
@@ -115,23 +115,23 @@ function FlexibleLaminateTree(F::Tensor{2,dim,T,N},r1convexification::R1Convexif
         end
         for child in parent.children
             depth = child.level -1
-            keyidx = findfirst(x->isapprox(x,child.F,atol=1e-8),_keys)
-            if ongrid(child.F,material.convexification.grid) && !(keyidx === nothing) && depth >= 1
-                if isassigned(laminateforrest[_keys[keyidx]],depth)
-                    laminates_ongrid = laminateforrest[_keys[keyidx]][depth]
+            _key = linearindex(child.F,r1convexification.grid)
+            if ongrid(child.F,r1convexification.grid) && !(_key === nothing) && depth >= 1
+                if haskey(laminateforrest,_key) && isassigned(laminateforrest[_key],depth)
+                    laminates_ongrid = laminateforrest[_key][depth]
                 else
                     #highest_order_laminate = lastindex(laminatesforrest[child.F])
                     #depth = highest_order_laminate - 1
                     #laminates_ongrid = laminatesforrest[child.F][depth]
                     continue
                 end
-                ξ = (norm(child.F,1) - norm(laminates_ongrid.F¯,1))/(norm(laminates_ongrid.F⁺,1) - norm(laminates_ongrid.F¯,1)) #TODO fix me
+                ξ = (norm(child.F - laminates_ongrid.F¯,1))/(norm(laminates_ongrid.F⁺ - laminates_ongrid.F¯,1)) #TODO fix me
                 (isinf(ξ) || isnan(ξ)) && continue
                 push!(laminates, (FlexibleLaminateTree(laminates_ongrid.F¯, laminates_ongrid.W¯, (1.0-ξ), laminates_ongrid.k),child))
                 push!(laminates, (FlexibleLaminateTree(laminates_ongrid.F⁺, laminates_ongrid.W⁺, ξ, laminates_ongrid.k),child))
-            elseif depth >= 1 && !ongrid(child.F,material.convexification.grid)
-                points, weights = decompose(child.F, state.W_rk1_new)
-                W_values = [state.W_rk1_new(point.data...) for point in points]
+            elseif depth >= 1 && !ongrid(child.F,r1convexification.grid)
+                points, weights = decompose(child.F, buffer.W_rk1)
+                W_values = [buffer.W_rk1(point.data...) for point in points]
                 perm = sortperm(W_values)
                 points = points[perm]; weights = weights[perm]
                 # TODO: Was ist hier richtig? gehen wir ein level höher, wenn wir es durch die lineare interpolation aufteilen, oder nicht?
@@ -166,16 +166,16 @@ function FlexibleLaminateTree(F::Tensor{2,dim,T,N},r1convexification::R1Convexif
     return root
 end
 
-function eval(node::FlexibleLaminateTree{2}, W::Function, xargs...)
+function eval(node::FlexibleLaminateTree{dim}, W_nonconvex::Function, xargs...) where dim
     W = 0.0
-    𝐏 = zero(Tensor{2,2})
-    𝔸 = zero(Tensor{4,2})
+    𝐏 = zero(Tensor{2,dim})
+    𝔸 = zero(Tensor{4,dim})
     if isempty(node.children)
-        𝔸_temp, 𝐏_temp, W_temp = Tensors.hessian(y -> W(y, xargs...), node.F, :all)
+        𝔸_temp, 𝐏_temp, W_temp = Tensors.hessian(y -> W_nonconvex(y, xargs...), node.F, :all)
         W += W_temp; 𝐏 += 𝐏_temp; 𝔸 += 𝔸_temp
     else
         for child in node.children
-            𝔸_c, 𝐏_c, W_c = eval(child,W,xargs...)
+            𝔸_c, 𝐏_c, W_c = eval(child,W_nonconvex,xargs...)
             W += child.ξ*W_c; 𝐏 += child.ξ*𝐏_c; 𝔸 += child.ξ * 𝔸_c
         end
     end
