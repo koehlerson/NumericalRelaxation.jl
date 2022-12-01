@@ -1,5 +1,3 @@
-# NumericalRelaxation.jl
-
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="https://github.com/koehlerson/NumericalRelaxation.jl/blob/main/docs/src/assets/logo-horizontal-light.svg">
   <source media="(prefers-color-scheme: dark)" srcset="https://github.com/koehlerson/NumericalRelaxation.jl/blob/main/docs/src/assets/logo-horizontal-dark.svg">
