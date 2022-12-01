@@ -219,9 +219,7 @@ version = "1.2.0"
 
 [[deps.NumericalRelaxation]]
 deps = ["AbstractTrees", "Interpolations", "LinearAlgebra", "Tensors"]
-git-tree-sha1 = "9f443c48d112849f0481720d99fec227d4d6e607"
-repo-rev = "mk/v1.0.0"
-repo-url = ".."
+path = ".."
 uuid = "82303a6c-a702-44d7-938a-15dad61d8a03"
 version = "1.0.0"
 
