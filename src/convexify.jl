@@ -1,8 +1,8 @@
 @doc raw"""
     GrahamScan{T<:Number} <: AbstractConvexification
 
-Datastructure that implements in `convexify` dispatch the discrete one-dimensional convexification of a line with actual deletion of memory.
-This results in a complexity of $\mathcal{O}(N)$. However, with additional costs due to the memory delete process.
+Datastructure that implements in `convexify` dispatch the discrete one-dimensional convexification of a line without deletion of memory.
+This results in a complexity of $\mathcal{O}(N)$.
 
 # Kwargs
 - `δ::T = 0.01`
@@ -26,7 +26,7 @@ end
 
 @doc raw"""
     convexify(graham::GrahamScan{T2}, buffer::ConvexificationBuffer1D{T1,T2}, W::Function, F, xargs...) where {T1,T2}  -> W_convex::Float64, F⁻::Tensor{2,1}, F⁺::Tensor{2,1}
-Function that implements the convexification without deletion in $\mathcal{O}(N)$.
+Function that implements the convexification on equidistant grid without deletion in $\mathcal{O}(N)$.
 """
 function convexify(graham::GrahamScan{T2}, buffer::ConvexificationBuffer1D{T1,T2}, W::Function, F::T1, xargs...) where {T1,T2}
     #init buffer for new convexification run
@@ -103,7 +103,7 @@ end
 
 @doc raw"""
     convexify(adaptivegraham::AdaptiveGrahamScan{T2}, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::Function, F, xargs...) where {T1,T2}  -> W_convex::Float64, F⁻::Tensor{2,1}, F⁺::Tensor{2,1}
-Function that implements the convexification without deletion in $\mathcal{O}(N)$.
+Function that implements the adaptive Graham's scan convexification without deletion in $\mathcal{O}(N)$.
 """
 function convexify(adaptivegraham::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::Function, F::T1, xargs...) where {T1,T2}
     #init function values **and grid** on coarse grid
@@ -138,7 +138,7 @@ is_convex(P1::Tuple,P2::Tuple,P3::Tuple) = (P3[2]-P2[2])/(P3[1][1]-P2[1][1]) >= 
 
 @doc raw"""
     convexify_nondeleting!(F, W)
-Function that implements the convexification without deletion, but in $\mathcal{O}(N)$.
+Kernel function that implements the actual convexification without deletion in $\mathcal{O}(N)$.
 """
 function convexify_nondeleting!(F, W)
     n = 2
@@ -884,10 +884,11 @@ Base.iterate(d::ParametrizedR1Directions, state=1) = Base.iterate(d.dirs, state)
 
 @doc raw"""
     R1Convexification{dimp,dimc,dirtype<:RankOneDirections{dimp},T1,T2,R} <: Convexification
-Datastructure that is used for the actual `material` struct as an equivalent to `GrahamScan` in the multidimensional relaxation setting.
-Bundles parallelization buffers, rank-one direction discretization as well as a tolerance and the convexification grid.
+Datastructure that is used as an equivalent to `GrahamScan` in the multidimensional rank-one relaxation setting.
+Bundles rank-one direction discretization as well as a tolerance and the convexification grid.
 # Constructor
     R1Convexification(axes_diag::AbstractRange,axes_off::AbstractRange;dirtype=ℛ¹Direction,dim=2,tol=1e-4)
+    R1Convexification(grid::GradientGrid,r1dirs,tol)
 
 # Fields
 - `grid::GradientGrid{dimc,T1,R}`
@@ -923,8 +924,9 @@ end
 @doc raw"""
     convexify!(r1convexification::R1Convexification,r1buffer::R1ConvexificationBuffer,W::Function,xargs...;buildtree=true,maxk=20)
 Multi-dimensional parallelized implementation of the rank-one convexification.
-This dispatch stores the lamination tree in the convexification threading buffer and merges them after convergence to a single dictionary.
+If `buildtree=true` the lamination tree is saved in the `r1buffer.laminatetree`.
 Note that the interpolation objects within `r1buffer` are overwritten in this routine.
+The approximated rank-one convex envelope is saved in `r1buffer.W_rk1`
 """
 function convexify!(r1convexification::R1Convexification,r1buffer::R1ConvexificationBuffer,W::Function,xargs...;buildtree=false,maxk=20)
     gradientgrid = r1convexification.grid
