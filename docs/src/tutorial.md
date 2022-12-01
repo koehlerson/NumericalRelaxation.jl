@@ -36,7 +36,7 @@ W_conv, F⁺, F⁻ = convexify(convexification,buffer,W,Tensor{2,1}((2.0,)),1.5,
 
 The rank-one convexification can be realized quite similarly.
 However, a triplet of the value, and the two gradients is not sufficient.
-There
+Therefore, the complete rank-one approximation in terms of the linear interpolation object and (optionally) lamination forrest are stored in the buffer.
 
 ```julia
 W_multi(F::Tensor{2,dim},x1=1) where dim = (norm(F)-x1)^2
