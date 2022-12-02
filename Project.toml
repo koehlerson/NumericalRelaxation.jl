@@ -10,6 +10,7 @@ LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Tensors = "48a634ad-e948-5137-8d70-aa71f2a747f4"
 
 [compat]
+AbstractTrees = "0.4"
 Interpolations = "0.14"
 Tensors = "1"
 julia = "1.7"
