@@ -1,4 +1,12 @@
-# NumericalRelaxation.jl
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="https://github.com/koehlerson/NumericalRelaxation.jl/blob/main/docs/src/assets/logo-horizontal-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/koehlerson/NumericalRelaxation.jl/blob/main/docs/src/assets/logo-horizontal-dark.svg">
+  <img alt="NumiercalRelaxation.jl logo." src="https://github.com/koehlerson/NumericalRelaxation.jl/blob/master/docs/src/assets/logo-horizontal-light.svg">
+</picture>
+
+![Build Status](https://github.com/koehlerson/NumericalRelaxation.jl/workflows/CI/badge.svg?event=push)
+[![][docs-dev-img]][docs-dev-url]
+
 
 This package implements various convexification algorithms that can be used for the numerical relaxation of variational problems.
 
@@ -23,4 +31,7 @@ We acknowledge the Deutsche Forschungsgemeinschaft (DFG) for funding within the 
 Program 2256 ("Variational Methods for Predicting Complex Phenomena in Engineering Structures and Materials"),
 project ID 441154176, reference ID BA2823/17-1.
 
-![spp-logo](docs/assets/spp-logo.png)
+![spp-logo](docs/src/assets/spp-logo.png)
+
+[docs-dev-img]: https://img.shields.io/badge/docs-latest%20release-blue
+[docs-dev-url]: http://koehlerson.github.io/NumericalRelaxation.jl/dev/
