@@ -25,7 +25,7 @@ function build_buffer(convexification::GrahamScan{T}) where T
 end
 
 @doc raw"""
-    convexify(graham::GrahamScan{T2}, buffer::ConvexificationBuffer1D{T1,T2}, W::Function, F, xargs...) where {T1,T2,FUN}  -> W_convex::Float64, F⁻::Tensor{2,1}, F⁺::Tensor{2,1}
+    convexify(graham::GrahamScan{T2}, buffer::ConvexificationBuffer1D{T1,T2}, W::FUN, F, xargs...) where {T1,T2,FUN}  -> W_convex::Float64, F⁻::Tensor{2,1}, F⁺::Tensor{2,1}
 Function that implements the convexification on equidistant grid without deletion in $\mathcal{O}(N)$.
 """
 function convexify(graham::GrahamScan{T2}, buffer::ConvexificationBuffer1D{T1,T2}, W::FUN, F::T1, xargs...) where {T1,T2,FUN}
@@ -103,7 +103,7 @@ function build_buffer(ac::AdaptiveGrahamScan)
 end
 
 @doc raw"""
-    convexify(adaptivegraham::AdaptiveGrahamScan{T2}, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::Function, F, xargs...) where {T1,T2,FUN}  -> W_convex::Float64, F⁻::Tensor{2,1}, F⁺::Tensor{2,1}
+    convexify(adaptivegraham::AdaptiveGrahamScan{T2}, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::FUN, F, xargs...) where {T1,T2,FUN}  -> W_convex::Float64, F⁻::Tensor{2,1}, F⁺::Tensor{2,1}
 Function that implements the adaptive Graham's scan convexification without deletion in $\mathcal{O}(N)$.
 """
 function convexify(adaptivegraham::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::FUN, F::T1, xargs...) where {T1,T2,FUN}
