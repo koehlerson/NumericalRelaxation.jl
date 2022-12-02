@@ -25,10 +25,10 @@ function build_buffer(convexification::GrahamScan{T}) where T
 end
 
 @doc raw"""
-    convexify(graham::GrahamScan{T2}, buffer::ConvexificationBuffer1D{T1,T2}, W::FUN, F, xargs...) where {T1,T2,FUN}  -> W_convex::Float64, F⁻::Tensor{2,1}, F⁺::Tensor{2,1}
+    convexify(graham::GrahamScan{T2}, buffer::ConvexificationBuffer1D{T1,T2}, W::FUN, F, xargs::Vararg{Any,XN}) where {T1,T2,FUN,XN}  -> W_convex::Float64, F⁻::Tensor{2,1}, F⁺::Tensor{2,1}
 Function that implements the convexification on equidistant grid without deletion in $\mathcal{O}(N)$.
 """
-function convexify(graham::GrahamScan{T2}, buffer::ConvexificationBuffer1D{T1,T2}, W::FUN, F::T1, xargs...) where {T1,T2,FUN}
+function convexify(graham::GrahamScan{T2}, buffer::ConvexificationBuffer1D{T1,T2}, W::FUN, F::T1, xargs::Vararg{Any,XN}) where {T1,T2,FUN,XN}
     #init buffer for new convexification run
     for (i,x) in enumerate(graham.start:graham.δ:graham.stop)
         tmp = T1(x)
@@ -103,10 +103,10 @@ function build_buffer(ac::AdaptiveGrahamScan)
 end
 
 @doc raw"""
-    convexify(adaptivegraham::AdaptiveGrahamScan{T2}, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::FUN, F, xargs...) where {T1,T2,FUN}  -> W_convex::Float64, F⁻::Tensor{2,1}, F⁺::Tensor{2,1}
+    convexify(adaptivegraham::AdaptiveGrahamScan{T2}, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::FUN, F::T1, xargs::Vararg{Any,XN}) where {T1,T2,FUN,XN}  -> W_convex::Float64, F⁻::Tensor{2,1}, F⁺::Tensor{2,1}
 Function that implements the adaptive Graham's scan convexification without deletion in $\mathcal{O}(N)$.
 """
-function convexify(adaptivegraham::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::FUN, F::T1, xargs...) where {T1,T2,FUN}
+function convexify(adaptivegraham::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::FUN, F::T1, xargs::Vararg{Any,XN}) where {T1,T2,FUN,XN}
     #init function values **and grid** on coarse grid
     buffer.basebuffer.values .= [W(F, xargs...) for x in buffer.basebuffer.grid]
     buffer.basegrid_∂²W .= [Tensors.hessian(i->W(i,xargs...), x) for x in buffer.basebuffer.grid]
@@ -923,13 +923,13 @@ function build_buffer(r1convexification::R1Convexification{dimp,dimc,dirtype,T})
 end
 
 @doc raw"""
-    convexify!(r1convexification::R1Convexification,r1buffer::R1ConvexificationBuffer,W::FUN,xargs...;buildtree=true,maxk=20) where FUN
+    convexify!(r1convexification::R1Convexification,r1buffer::R1ConvexificationBuffer,W::FUN,xargs::Vararg{Any,XN};buildtree=true,maxk=20) where {FUN,XN}
 Multi-dimensional parallelized implementation of the rank-one convexification.
 If `buildtree=true` the lamination tree is saved in the `r1buffer.laminatetree`.
 Note that the interpolation objects within `r1buffer` are overwritten in this routine.
 The approximated rank-one convex envelope is saved in `r1buffer.W_rk1`
 """
-function convexify!(r1convexification::R1Convexification,r1buffer::R1ConvexificationBuffer,W::FUN,xargs...;buildtree=false,maxk=20) where FUN
+function convexify!(r1convexification::R1Convexification,r1buffer::R1ConvexificationBuffer,W::FUN,xargs::Vararg{Any,XN};buildtree=false,maxk=20) where {FUN,XN}
     gradientgrid = r1convexification.grid
     directions = r1convexification.dirs
     W_rk1 = r1buffer.W_rk1
