@@ -30,8 +30,8 @@ Function that implements the convexification on equidistant grid without deletio
 """
 function convexify(graham::GrahamScan{T2}, buffer::ConvexificationBuffer1D{T1,T2}, W::Function, F::T1, xargs...) where {T1,T2}
     #init buffer for new convexification run
-    for (i,F) in enumerate(graham.start:graham.δ:graham.stop)
-        buffer.grid[i] = T1(F)
+    for (i,x) in enumerate(graham.start:graham.δ:graham.stop)
+        buffer.grid[i] = T1(x)
         buffer.values[i] = W(buffer.grid[i], xargs...)
     end
     #convexify
