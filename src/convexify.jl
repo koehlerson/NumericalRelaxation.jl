@@ -1050,3 +1050,10 @@ function convexify!(f, x, ctr, h, y)
     g_ss = h[j-1] + λ * -y[j-1]
     return g_ss, j
 end
+
+struct BinaryAdaptiveLaminationTree{dimp,dimc,R1Dir<:RankOneDirections{dimp},T,R<:AbstractRange{T}}
+    maxlevel::Int
+    n_convexpoints::Int
+    dirs::R1Dir
+    axes::NTuple{dimc,R} 
+end
