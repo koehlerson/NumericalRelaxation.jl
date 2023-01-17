@@ -3,10 +3,12 @@ export
     GrahamScan,
     AdaptiveGrahamScan,
     R1Convexification,
+    BALTConvexification,
 #convexification buffers
     ConvexificationBuffer1D,
     AdaptiveConvexificationBuffer1D,
     R1ConvexificationBuffer,
+    BALTBuffer,
     build_buffer,
 #convexification functions
     convexify,

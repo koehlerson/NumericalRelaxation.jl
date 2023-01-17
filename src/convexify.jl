@@ -881,6 +881,7 @@ end
 ParametrizedR1Directions(dimp::Int) = ParametrizedR1Directions(Val(dimp))
 ParametrizedR1Directions(gradientgrid::GradientGrid{dimc}) where dimc = ParametrizedR1Directions(isqrt(dimc))
 Base.iterate(d::ParametrizedR1Directions, state=1) = Base.iterate(d.dirs, state)
+Base.length(d::ParametrizedR1Directions) = length(d.dirs)
 
 
 @doc raw"""
@@ -1027,7 +1028,7 @@ end
 Rank-one line convexification algorithm in multiple dimensions without deletion, but in $\mathcal{O}(N)$
 """
 function convexify!(f, x, ctr, h, y)
-    fill!(h,zero(eltype(h))); fill!(y,zero(eltype(y)))
+    Base.fill!(h,zero(eltype(h))); Base.fill!(y,zero(eltype(y)))
     last = 2
     h[1] = f[1]; h[2] = f[2];
     y[1] = x[1]; y[2] = x[2];
@@ -1051,9 +1052,170 @@ function convexify!(f, x, ctr, h, y)
     return g_ss, j
 end
 
-struct BinaryAdaptiveLaminationTree{dimp,dimc,R1Dir<:RankOneDirections{dimp},T,R<:AbstractRange{T}}
+function convexify!(buffer::BALTBuffer,ctr::Int)
+    return convexify!(buffer.initial.values,buffer.initial.grid,ctr,buffer.convex.values,buffer.convex.grid)
+end
+
+struct BALTConvexification{dimp,R1Dir<:RankOneDirections{dimp},T}
     maxlevel::Int
     n_convexpoints::Int
     dirs::R1Dir
-    axes::NTuple{dimc,R} 
+    startF::Vector{T}
+    endF::Vector{T}
+end
+
+function build_buffer(convexification::BALTConvexification{dimp,R1Dir,T}) where {dimp,R1Dir <: RankOneDirections{dimp}, T}
+    F = zeros(Int,convexification.n_convexpoints)
+    W = zeros(T,convexification.n_convexpoints)
+    buffer = ConvexificationBuffer1D(F,W)
+    return BALTBuffer(buffer,deepcopy(buffer),deepcopy(buffer),deepcopy(buffer),deepcopy(buffer),deepcopy(buffer))
+end
+
+function δ(convexification::BALTConvexification{dimp,R1Dir,T},A::Tensor{2,dimp}) where {dimp,R1Dir<:RankOneDirections{dimp},T}
+    startF = convexification.startF
+    endF = convexification.endF
+    nonzeros = findall(x->x != 0,A)
+    newvals = zeros(T,length(A))
+    for (idn,idx) in enumerate(CartesianIndices(A))
+        if idx ∈ nonzeros
+            newvals[idn] = (endF[idn] - startF[idn])/convexification.n_convexpoints
+        end
+    end
+    return Tensor{2,dimp,T,dimp^2}(newvals)
+end
+
+function inbounds(𝐱::Tensor{2,dimp}, convexification::BALTConvexification) where dimp
+    check = zeros(Bool,dimp^2)
+    for i in 1:dimp^2
+        check[i] = convexification.startF[i] ≤ 𝐱[i] ≤ convexification.endF[i]
+    end
+    return all(check)
+end
+
+function baltkernel(convexification::BALTConvexification, buffer::BALTBuffer, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
+    W_ref = W(F,xargs...)
+    r1dir_minimal = zero(F)
+    laminate = nothing
+    for (𝐚,𝐛) in convexification.dirs
+        fill!(buffer) # fill buffers with zeros
+        𝐀 = (𝐚 ⊗ 𝐛)
+        _δ = δ(convexification, 𝐀)
+        𝐀 = Tensor{2,dim}((i,j) -> 𝐀[i,j] * _δ[i,j])
+        if norm(𝐀,Inf) > 0
+            ctr_fw = 0
+            ctr_bw = 0
+            for dir in (-1, 1)
+                if dir==-1
+                    𝐱 = F - 𝐀 # init dir
+                    ell = -1 # start bei -1, deswegen -𝐀
+                else
+                    𝐱 = F # init dir
+                    ell = 0 # start bei 0
+                end
+                while inbounds(𝐱,convexification) && det(𝐱) > 0
+                    val = W(𝐱,xargs...)
+                    if dir == 1
+                        buffer.forward_initial.values[ctr_fw+1] = val
+                        buffer.forward_initial.grid[ctr_fw+1] = ell
+                        ctr_fw += 1
+                    else
+                        buffer.backward_initial.values[ctr_bw+1] = val
+                        buffer.backward_initial.grid[ctr_bw+1] = ell
+                        ctr_bw += 1
+                    end
+                    𝐱 += dir*𝐀
+                    ell += dir
+                end
+            end
+            if ((ctr_fw > 0) && (ctr_bw > 0))
+                concat!(buffer,ctr_fw,ctr_bw)
+                Wᶜ, j = convexify!(buffer,ctr_bw+ctr_fw)
+                if Wᶜ < W_ref
+                    W_ref = Wᶜ
+                    l₁ = buffer.convex.grid[j-1]
+                    l₂ = buffer.convex.grid[j]
+                    F¯ = F + l₁*𝐀
+                    F⁺ = F + l₂*𝐀
+                    W¯ = W(F¯,xargs...)
+                    W⁺ = W(F⁺,xargs...)
+                    laminate = Laminate(F¯,F⁺,W¯,W⁺,𝐀,0)
+                end
+            end
+        end
+    end
+    return laminate
+end
+
+mutable struct BinaryAdaptiveLaminationTree{dim,T,N}
+    F::Tensor{2,dim,T,N}
+    W::T
+    ξ::T
+    level::Int
+    minus::Union{BinaryAdaptiveLaminationTree{dim,T,N},Nothing}
+    plus::Union{BinaryAdaptiveLaminationTree{dim,T,N},Nothing}
+end
+
+BinaryAdaptiveLaminationTree(F,W,ξ,l) = BinaryAdaptiveLaminationTree(F,W,ξ,l,nothing,nothing)
+
+function BinaryAdaptiveLaminationTree(convexification::BALTConvexification, buffer::BALTBuffer, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
+    level = convexification.maxlevel
+    root = BinaryAdaptiveLaminationTree(F, 0.0, 1.0, level + 1)
+    #TODO convexify node
+    laminate = baltkernel(convexification,buffer,W,F,xargs...)
+    if laminate === nothing
+        return root
+    end
+    queue = [(root, laminate)]
+
+    while !isempty(queue)
+        parent, lc = pop!(queue)
+        ξ = norm(parent.F - lc.F⁻) / norm(lc.F⁺ - lc.F⁻)
+        parent.minus = BinaryAdaptiveLaminationTree(lc.F⁻, lc.W⁻, (1.0 - ξ), level)
+        parent.plus = BinaryAdaptiveLaminationTree(lc.F⁺, lc.W⁺, ξ, level)
+        level -= 1
+        if level > 1
+            laminate⁺ = baltkernel(convexification,buffer,W,lc.F⁺,xargs...)
+            laminate⁻ = baltkernel(convexification,buffer,W,lc.F⁻,xargs...)
+            !(laminate⁺ === nothing) && push!(queue,(parent.plus, laminate⁺))
+            !(laminate⁻ === nothing) && push!(queue,(parent.minus,laminate⁻))
+        end
+    end
+    return root
+end
+
+function convexify(balt::BALTConvexification, buffer::BALTBuffer, W::FUN, F::T1, xargs::Vararg{Any,XN}) where {T1,FUN,XN}
+    return BinaryAdaptiveLaminationTree(balt,buffer,W,F,xargs...)
+end
+
+function eval(node::BinaryAdaptiveLaminationTree{dim}, W_nonconvex::FUN, xargs::Vararg{Any,XN}) where {dim,FUN,XN}
+    W = 0.0
+    𝐏 = zero(Tensor{2,dim})
+    𝔸 = zero(Tensor{4,dim})
+    if node.minus === nothing && node.plus === nothing
+        𝔸_temp, 𝐏_temp, W_temp = Tensors.hessian(y -> W_nonconvex(y, xargs...), node.F, :all)
+        W += W_temp; 𝐏 += 𝐏_temp; 𝔸 += 𝔸_temp
+    else
+        𝔸⁻, 𝐏⁻, W⁻ = eval(node.minus,W_nonconvex,xargs...)
+        𝔸⁺, 𝐏⁺, W⁺ = eval(node.plus,W_nonconvex,xargs...)
+        ξ = node.plus.ξ
+        W += ξ*W⁺+(1-ξ)*W⁻; 𝐏 += ξ*𝐏⁺+(1-ξ)*𝐏⁻; 𝔸 += ξ*𝔸⁺+(1-ξ)*𝔸⁻
+    end
+    return 𝔸, 𝐏, W
+end
+
+
+AbstractTrees.printnode(io::IO, node::BinaryAdaptiveLaminationTree) = print(io, "$(node.F) ξ=$(node.ξ)")
+Base.show(io::IO, ::MIME"text/plain", tree::BinaryAdaptiveLaminationTree) = AbstractTrees.print_tree(io, tree)
+Base.eltype(::Type{<:AbstractTrees.TreeIterator{BinaryAdaptiveLaminationTree{dim,T,N}}}) where {dim,T,N} = BinaryAdaptiveLaminationTree{dim,T,N}
+Base.IteratorEltype(::Type{<:AbstractTrees.TreeIterator{BinaryAdaptiveLaminationTree{dim,T,N}}}) where {dim,T,N} = Base.HasEltype()
+
+function AbstractTrees.children(node::BinaryAdaptiveLaminationTree)
+    if !isnothing(node.minus)
+        if !isnothing(node.plus)
+            return (node.minus, node.plus)
+        end
+        return (node.left,)
+    end
+    !isnothing(node.plus) && return (node.plus,)
+    return ()
 end
