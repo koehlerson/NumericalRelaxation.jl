@@ -1101,7 +1101,7 @@ function baltkernel(convexification::BALTConvexification, buffer::BALTBuffer, W:
         𝐀 = (𝐚 ⊗ 𝐛)
         _δ = δ(convexification, 𝐀)
         𝐀 = Tensor{2,dim}((i,j) -> 𝐀[i,j] * _δ[i,j])
-        if norm(𝐀,Inf) > 0
+        if norm(𝐀,Inf) > 0 && rank(𝐀) < 2
             ctr_fw = 0
             ctr_bw = 0
             for dir in (-1, 1)
