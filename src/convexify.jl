@@ -1060,6 +1060,7 @@ struct BALTConvexification{dimp,R1Dir<:RankOneDirections{dimp},T}
     maxlevel::Int
     n_convexpoints::Int
     dirs::R1Dir
+    GLcheck::Bool
     startF::Vector{T}
     endF::Vector{T}
 end
@@ -1094,7 +1095,6 @@ end
 
 function baltkernel(convexification::BALTConvexification, buffer::BALTBuffer, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
     W_ref = W(F,xargs...)
-    r1dir_minimal = zero(F)
     laminate = nothing
     for (𝐚,𝐛) in convexification.dirs
         fill!(buffer) # fill buffers with zeros
@@ -1113,7 +1113,7 @@ function baltkernel(convexification::BALTConvexification, buffer::BALTBuffer, W:
                     𝐱 = F # init dir
                     ell = 0 # start bei 0
                 end
-                while inbounds(𝐱,convexification) && det(𝐱) > 0
+                while inbounds(𝐱,convexification) && (convexification.GLcheck ? det(𝐱) > 0 : true)
                     val = W(𝐱,xargs...)
                     if dir == 1
                         buffer.forward_initial.values[ctr_fw+1] = val
