@@ -139,6 +139,40 @@ end
     end
 end
 
+@testset "BALT" begin
+    for dim in (2,3)
+        convexification = BALTConvexification(10,500,ParametrizedR1Directions(dim),false,[-2.0 for _ in 1:dim^2],[2.0 for _ in 1:dim^2])
+        buffer = build_buffer(convexification)
+        F = zero(Tensor{2,dim})
+        bt = convexify(convexification,buffer,W_multi,F)
+        𝔸, 𝐏, W_val = NumericalRelaxation.eval(bt,W_multi)
+        @test NumericalRelaxation.checkintegrity(bt)
+        @test isapprox(W_val,0.0,atol=1e-4)
+        @test isapprox(𝐏,F,atol=1e-4)
+
+        @testset "BALTBuffer" begin
+            ctr_fw = 4
+            ctr_bw = 4
+            buffer.forward_initial.grid[1:ctr_fw] .= [0,1,2,3]
+            buffer.backward_initial.grid[1:ctr_bw] .= [-1,-2,-3,-4]
+            NumericalRelaxation.concat!(buffer,ctr_fw+1,ctr_bw)
+            @test all(buffer.initial.grid[1:ctr_fw+ctr_bw] .== [-4,-3,-2,-1,0,1,2,3])
+        end
+
+        @testset "Type stability" begin
+            laminate = @inferred Nothing NumericalRelaxation.baltkernel(convexification,buffer,W_multi,zero(Tensor{2,dim}))
+            @test laminate.W⁺ == laminate.W⁻ && isapprox(laminate.W⁺,0.0,atol=1e-4) && isapprox(laminate.W⁻,0.0,atol=1e-4)
+            if dim ==2
+                @test laminate.F⁺ == Tensor{2,dim}([-0.496 0.496; -0.496 0.496])
+                @test laminate.F⁻ == Tensor{2,dim}([0.496 -0.496; 0.496 -0.496])
+            else
+                @test laminate.F⁺ == Tensor{2,dim}([-0.336 0.336 0.336; -0.336 0.336 0.336; -0.336 0.336 0.336])
+                @test laminate.F⁻ == Tensor{2,dim}([0.336 -0.336 -0.336; 0.336 -0.336 -0.336; 0.336 -0.336 -0.336])
+            end
+        end
+    end
+end
+
 @testset "Adaptive Convexification" begin
     ac = AdaptiveGrahamScan(
             interval=[0.001,5.0],

@@ -1072,25 +1072,15 @@ function build_buffer(convexification::BALTConvexification{dimp,R1Dir,T}) where 
     return BALTBuffer(buffer,deepcopy(buffer),deepcopy(buffer),deepcopy(buffer),deepcopy(buffer),deepcopy(buffer))
 end
 
-function δ(convexification::BALTConvexification{dimp,R1Dir,T},A::Tensor{2,dimp}) where {dimp,R1Dir<:RankOneDirections{dimp},T}
+function δ(convexification::BALTConvexification{dimp,R1Dir,T},A::Tensor{2,dimp,T,dimc}) where {dimp,R1Dir<:RankOneDirections{dimp},T,dimc}
     startF = convexification.startF
     endF = convexification.endF
-    nonzeros = findall(x->x != 0,A)
-    newvals = zeros(T,length(A))
-    for (idn,idx) in enumerate(CartesianIndices(A))
-        if idx ∈ nonzeros
-            newvals[idn] = (endF[idn] - startF[idn])/convexification.n_convexpoints
-        end
-    end
-    return Tensor{2,dimp,T,dimp^2}(newvals)
+    newvals = ntuple(i->A[i] != 0 ? (endF[i] - startF[i])/convexification.n_convexpoints : Inf,dimc)
+    return Tensor{2,dimp,T,dimc}(newvals)
 end
 
-function inbounds(𝐱::Tensor{2,dimp}, convexification::BALTConvexification) where dimp
-    check = zeros(Bool,dimp^2)
-    for i in 1:dimp^2
-        check[i] = convexification.startF[i] ≤ 𝐱[i] ≤ convexification.endF[i]
-    end
-    return all(check)
+function inbounds(𝐱::Tensor{2,dimp,T,dimc}, convexification::BALTConvexification) where {dimp,T,dimc}
+    return all(ntuple(i->convexification.startF[i] ≤ 𝐱[i] ≤ convexification.endF[i],dimc))
 end
 
 function baltkernel(convexification::BALTConvexification, buffer::BALTBuffer, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
@@ -1098,11 +1088,10 @@ function baltkernel(convexification::BALTConvexification, buffer::BALTBuffer, W:
     laminate = nothing
     for (𝐚,𝐛) in convexification.dirs
         fill!(buffer) # fill buffers with zeros
-        𝐀 = (𝐚 ⊗ 𝐛)
+        𝐀::Tensor{2,dim,T,N} = (𝐚 ⊗ 𝐛)
         _δ = minimum(δ(convexification, 𝐀))
         𝐀 *= _δ
         if norm(𝐀,Inf) > 0
-            @assert rank(𝐀) == 1
             ctr_fw = 0
             ctr_bw = 0
             for dir in (-1, 1)
@@ -1129,17 +1118,17 @@ function baltkernel(convexification::BALTConvexification, buffer::BALTBuffer, W:
                 end
             end
             if ((ctr_fw > 0) && (ctr_bw > 0))
-                concat!(buffer,ctr_fw,ctr_bw)
+                concat!(buffer,ctr_fw+1,ctr_bw)
                 Wᶜ, j = convexify!(buffer,ctr_bw+ctr_fw)
                 if Wᶜ < W_ref
                     W_ref = Wᶜ
                     l₁ = buffer.convex.grid[j-1]
                     l₂ = buffer.convex.grid[j]
-                    F¯ = F + l₁*𝐀
+                    F⁻ = F + l₁*𝐀
                     F⁺ = F + l₂*𝐀
-                    W¯ = W(F¯,xargs...)
+                    W⁻ = W(F⁻,xargs...)
                     W⁺ = W(F⁺,xargs...)
-                    laminate = Laminate(F¯,F⁺,W¯,W⁺,𝐀,0)
+                    laminate = Laminate(F⁻,F⁺,W⁻,W⁺,𝐀,0)
                 end
             end
         end
@@ -1161,7 +1150,6 @@ BinaryAdaptiveLaminationTree(F,W,ξ,l) = BinaryAdaptiveLaminationTree(F,W,ξ,l,n
 function BinaryAdaptiveLaminationTree(convexification::BALTConvexification, buffer::BALTBuffer, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
     level = convexification.maxlevel
     root = BinaryAdaptiveLaminationTree(F, 0.0, 1.0, level + 1)
-    #TODO convexify node
     laminate = baltkernel(convexification,buffer,W,F,xargs...)
     if laminate === nothing
         return root
@@ -1204,6 +1192,25 @@ function eval(node::BinaryAdaptiveLaminationTree{dim}, W_nonconvex::FUN, xargs::
     return 𝔸, 𝐏, W
 end
 
+function checkintegrity(tree::BinaryAdaptiveLaminationTree,tol=1e-4)
+    isintegre = true
+    for node in AbstractTrees.StatelessBFS(tree)
+        if node.minus === nothing && node.plus === nothing
+            continue
+        end
+        F = node.F
+        W = node.W
+        points = [node.minus.F, node.plus.F]
+        weights = [node.minus.ξ, node.plus.ξ]
+        W_values = [node.minus.W, node.plus.W]
+        isintegre = isapprox(F,sum(points .* weights),atol=tol) && isapprox(W,sum(W_values .* weights),atol=tol) && rank(points[2] - points[1]) < 2
+        if !isintegre
+            isintegre = false
+            break
+        end
+    end
+    return isintegre
+end
 
 AbstractTrees.printnode(io::IO, node::BinaryAdaptiveLaminationTree) = print(io, "$(node.F) ξ=$(node.ξ)")
 Base.show(io::IO, ::MIME"text/plain", tree::BinaryAdaptiveLaminationTree) = AbstractTrees.print_tree(io, tree)

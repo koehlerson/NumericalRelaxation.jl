@@ -100,9 +100,9 @@ function FlexibleLaminateTree(F::Tensor{2,dim,T,N},r1convexification::R1Convexif
     while !isempty(laminates)
         lc,parent = pop!(laminates)
         if lc isa Laminate
-            ξ = (norm(parent.F - lc.F¯,1))/(norm(lc.F⁺ - lc.F¯,1)) #TODO fix me
+            ξ = (norm(parent.F - lc.F⁻,1))/(norm(lc.F⁺ - lc.F⁻,1)) #TODO fix me
             #isnan(ξ) && continue
-            push!(parent.children, FlexibleLaminateTree(lc.F¯, lc.W¯, (1.0-ξ), lc.k))
+            push!(parent.children, FlexibleLaminateTree(lc.F⁻, lc.W⁻, (1.0-ξ), lc.k))
             push!(parent.children, FlexibleLaminateTree(lc.F⁺, lc.W⁺, ξ, lc.k))
             #depth = laminate.k
             #depth -= 1
@@ -125,9 +125,9 @@ function FlexibleLaminateTree(F::Tensor{2,dim,T,N},r1convexification::R1Convexif
                     #laminates_ongrid = laminatesforrest[child.F][depth]
                     continue
                 end
-                ξ = (norm(child.F - laminates_ongrid.F¯,1))/(norm(laminates_ongrid.F⁺ - laminates_ongrid.F¯,1)) #TODO fix me
+                ξ = (norm(child.F - laminates_ongrid.F⁻,1))/(norm(laminates_ongrid.F⁺ - laminates_ongrid.F⁻,1)) #TODO fix me
                 (isinf(ξ) || isnan(ξ)) && continue
-                push!(laminates, (FlexibleLaminateTree(laminates_ongrid.F¯, laminates_ongrid.W¯, (1.0-ξ), laminates_ongrid.k),child))
+                push!(laminates, (FlexibleLaminateTree(laminates_ongrid.F⁻, laminates_ongrid.W⁻, (1.0-ξ), laminates_ongrid.k),child))
                 push!(laminates, (FlexibleLaminateTree(laminates_ongrid.F⁺, laminates_ongrid.W⁺, ξ, laminates_ongrid.k),child))
             elseif depth >= 1 && !ongrid(child.F,r1convexification.grid)
                 points, weights = decompose(child.F, buffer.W_rk1)

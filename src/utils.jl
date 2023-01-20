@@ -163,7 +163,7 @@ function concat!(conc_list, a_fw, s_fw, a_bw, s_bw)
         conc_list[ctr] = a_bw[j]
         ctr += 1
     end
-    for j in 1:1:s_fw
+    for j in 1:1:s_fw-1
         conc_list[ctr] = a_fw[j]
         ctr += 1
     end
