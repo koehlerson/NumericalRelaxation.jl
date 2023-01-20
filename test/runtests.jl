@@ -163,11 +163,11 @@ end
             laminate = @inferred Nothing NumericalRelaxation.baltkernel(convexification,buffer,W_multi,zero(Tensor{2,dim}))
             @test laminate.W⁺ == laminate.W⁻ && isapprox(laminate.W⁺,0.0,atol=1e-4) && isapprox(laminate.W⁻,0.0,atol=1e-4)
             if dim ==2
-                @test laminate.F⁺ == Tensor{2,dim}([-0.496 0.496; -0.496 0.496])
-                @test laminate.F⁻ == Tensor{2,dim}([0.496 -0.496; 0.496 -0.496])
+                @test laminate.F⁺ == Tensor{2,dim}([0.0 1.0; 0.0 0.0])
+                @test laminate.F⁻ == Tensor{2,dim}([0.0 -1.0; 0.0 0.0])
             else
-                @test laminate.F⁺ == Tensor{2,dim}([-0.336 0.336 0.336; -0.336 0.336 0.336; -0.336 0.336 0.336])
-                @test laminate.F⁻ == Tensor{2,dim}([0.336 -0.336 -0.336; 0.336 -0.336 -0.336; 0.336 -0.336 -0.336])
+                @test laminate.F⁺ == Tensor{2,dim}([0.0 1.0 0.0; 0.0 0.0 0.0; 0.0 0.0 0.0])
+                @test laminate.F⁻ == Tensor{2,dim}([0.0 -1.0 0.0; 0.0 0.0 0.0; 0.0 0.0 0.0])
             end
         end
     end
