@@ -1066,7 +1066,7 @@ struct BALTConvexification{dimp,R1Dir<:RankOneDirections{dimp},T}
 end
 
 function BALTConvexification(maxlevel::Int,n_convexpoints::Int,dir::R1Dir,GLcheck::Bool,start::Tensor{2,dimp,T,dimc},stop::Tensor{2,dimp,T,dimc}) where {dimp,R1Dir<:RankOneDirections{dimp},T,dimc}
-    BALTConvexification(maxlevel,n_convexpoints,dir,GLcheck,tovoigt(start),tovoigt(stop))
+    BALTConvexification(maxlevel,n_convexpoints,dir,GLcheck,collect(start.data),collect(stop.data))
 end
 
 BALTConvexification(start::Tensor{2,dimp},stop::Tensor{2,dimp};maxlevel=10,dirs=ParametrizedR1Directions(dimp),GLcheck=true,n_convexpoints=1000) where {dimp} = BALTConvexification(maxlevel,n_convexpoints,dirs,GLcheck,start,stop)
