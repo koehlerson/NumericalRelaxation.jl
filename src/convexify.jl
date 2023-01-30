@@ -1072,8 +1072,8 @@ end
 BALTConvexification(start::Tensor{2,dimp},stop::Tensor{2,dimp};maxlevel=10,dirs=ParametrizedR1Directions(dimp),GLcheck=true,n_convexpoints=1000) where {dimp} = BALTConvexification(maxlevel,n_convexpoints,dirs,GLcheck,start,stop)
 
 function build_buffer(convexification::BALTConvexification{dimp,R1Dir,T}) where {dimp,R1Dir <: RankOneDirections{dimp}, T}
-    F = zeros(Int,convexification.n_convexpoints)
-    W = zeros(T,convexification.n_convexpoints)
+    F = zeros(Int,convexification.n_convexpoints+2)
+    W = zeros(T,convexification.n_convexpoints+2)
     buffer = ConvexificationBuffer1D(F,W)
     return BALTBuffer(buffer,deepcopy(buffer),deepcopy(buffer),deepcopy(buffer),deepcopy(buffer),deepcopy(buffer))
 end
