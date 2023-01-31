@@ -1056,7 +1056,7 @@ function convexify!(buffer::BALTBuffer,ctr::Int)
     return convexify!(buffer.initial.values,buffer.initial.grid,ctr,buffer.convex.values,buffer.convex.grid)
 end
 
-struct BALTConvexification{dimp,R1Dir<:RankOneDirections{dimp},T}
+struct BALTConvexification{dimp,R1Dir<:RankOneDirections{dimp},T} <: AbstractConvexification
     maxlevel::Int
     n_convexpoints::Int
     dirs::R1Dir
