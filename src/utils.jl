@@ -41,7 +41,7 @@ Tensors.Tensor{order,1,T,1}(x::T) where {order,T} = Tensor{order,1}((x,))
 ####################################################
 ####################################################
 
-struct BALTBuffer{T1,T2}
+struct BALTBuffer{T1,T2} <: AbstractConvexificationBuffer
     #concat array for rank-one line convexification input
     initial::ConvexificationBuffer1D{T1,T2}
     #output list of rank-one line convexification
