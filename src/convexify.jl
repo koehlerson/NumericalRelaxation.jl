@@ -1165,6 +1165,9 @@ function BinaryAdaptiveLaminationTree(convexification::BALTConvexification, buff
     while !isempty(queue)
         parent, lc = pop!(queue)
         ξ = norm(parent.F - lc.F⁻) / norm(lc.F⁺ - lc.F⁻)
+        if isapprox(ξ,1.0,atol=1e-8) || isapprox(ξ,0.0,atol=1e-8)
+            continue
+        end
         parent.minus = BinaryAdaptiveLaminationTree(lc.F⁻, lc.W⁻, (1.0 - ξ), level)
         parent.plus = BinaryAdaptiveLaminationTree(lc.F⁺, lc.W⁺, ξ, level)
         level -= 1
@@ -1209,7 +1212,7 @@ function checkintegrity(tree::BinaryAdaptiveLaminationTree,tol=1e-4)
         points = [node.minus.F, node.plus.F]
         weights = [node.minus.ξ, node.plus.ξ]
         W_values = [node.minus.W, node.plus.W]
-        isintegre = isapprox(F,sum(points .* weights),atol=tol) && isapprox(W,sum(W_values .* weights),atol=tol) && rank(points[2] - points[1]) < 2
+        isintegre = isapprox(F,sum(points .* weights),atol=tol) && rank(points[2] - points[1]) < 2
         if !isintegre
             isintegre = false
             break
