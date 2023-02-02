@@ -854,31 +854,35 @@ struct ParametrizedR1Directions{dimp,T} <: RankOneDirections{dimp}
     dirs::Vector{Tuple{Vec{dimp,T},Vec{dimp,T}}}
 end
 
-function ParametrizedR1Directions(::Val{2})
+function ParametrizedR1Directions(::Val{2};l=1)
     rankdirs = Vector{Tuple{Vec{2,Int},Vec{2,Int}}}()
-    for i in -1:1, j in -1:1, m in 0:1, n in 0:1
+    for i in -l:l, j in -l:l, m in -0:l, n in -0:l #TODO is this ok?
         if (i==j==0) || (m==n==0)
             continue
         else
             push!(rankdirs,(Vec{2}((i,j)),Vec{2}((m,n))))
         end
     end
-    return ParametrizedR1Directions(rankdirs)
+    dirs = [𝐚 ⊗ 𝐛 for (𝐚, 𝐛) in rankdirs]
+    uniqueidx = unique(i -> dirs[i], eachindex(dirs))
+    return ParametrizedR1Directions(rankdirs[uniqueidx])
 end
 
-function ParametrizedR1Directions(::Val{3})
+function ParametrizedR1Directions(::Val{3};l=1)
     rankdirs = Vector{Tuple{Vec{3,Int},Vec{3,Int}}}()
-    for i in -1:1, j in -1:1, k in -1:1, l in 0:1, m in -1:1, n in -1:1
+    for i in -l:l, j in -l:l, k in -l:l, l in 0:l, m in 0:l, n in 0:l
         if (i==j==k==0) || (l==m==n==0)
             continue
         else
             push!(rankdirs,(Vec{3}((i,j,k)),Vec{3}((l,m,n))))
         end
     end
-    return ParametrizedR1Directions(rankdirs)
+    dirs = [𝐚 ⊗ 𝐛 for (𝐚, 𝐛) in rankdirs]
+    uniqueidx = unique(i -> dirs[i], eachindex(dirs))
+    return ParametrizedR1Directions(rankdirs[uniqueidx])
 end
 
-ParametrizedR1Directions(dimp::Int) = ParametrizedR1Directions(Val(dimp))
+ParametrizedR1Directions(dimp::Int;l=1) = ParametrizedR1Directions(Val(dimp);l=l)
 ParametrizedR1Directions(gradientgrid::GradientGrid{dimc}) where dimc = ParametrizedR1Directions(isqrt(dimc))
 Base.iterate(d::ParametrizedR1Directions, state=1) = Base.iterate(d.dirs, state)
 Base.length(d::ParametrizedR1Directions) = length(d.dirs)
@@ -1069,7 +1073,7 @@ function BALTConvexification(maxlevel::Int,n_convexpoints::Int,dir::R1Dir,GLchec
     BALTConvexification(maxlevel,n_convexpoints,dir,GLcheck,collect(start.data),collect(stop.data))
 end
 
-BALTConvexification(start::Tensor{2,dimp},stop::Tensor{2,dimp};maxlevel=10,dirs=ParametrizedR1Directions(dimp),GLcheck=true,n_convexpoints=1000) where {dimp} = BALTConvexification(maxlevel,n_convexpoints,dirs,GLcheck,start,stop)
+BALTConvexification(start::Tensor{2,dimp},stop::Tensor{2,dimp};maxlevel=10,l=1,dirs=ParametrizedR1Directions(dimp;l=l),GLcheck=true,n_convexpoints=1000) where {dimp} = BALTConvexification(maxlevel,n_convexpoints,dirs,GLcheck,start,stop)
 
 function build_buffer(convexification::BALTConvexification{dimp,R1Dir,T}) where {dimp,R1Dir <: RankOneDirections{dimp}, T}
     F = zeros(Int,convexification.n_convexpoints+2)
@@ -1103,12 +1107,12 @@ function baltkernel(convexification::BALTConvexification, buffer::BALTBuffer, W:
             for dir in (-1, 1)
                 if dir==-1
                     𝐱 = F - 𝐀 # init dir
-                    ell = -1 # start bei -1, deswegen -𝐀
+                    ell = -1 # start at -1, so - 𝐀
                 else
                     𝐱 = F # init dir
-                    ell = 0 # start bei 0
+                    ell = 0 # start at 0
                 end
-                while inbounds(𝐱,convexification) && (convexification.GLcheck ? det(𝐱) > 0 : true)
+                while inbounds(𝐱,convexification) && (convexification.GLcheck ? det(𝐱) > 1e-10 : true)
                     val = W(𝐱,xargs...)
                     if dir == 1
                         buffer.forward_initial.values[ctr_fw+1] = val
@@ -1126,7 +1130,7 @@ function baltkernel(convexification::BALTConvexification, buffer::BALTBuffer, W:
             if ((ctr_fw > 0) && (ctr_bw > 0))
                 concat!(buffer,ctr_fw+1,ctr_bw)
                 Wᶜ, j = convexify!(buffer,ctr_bw+ctr_fw)
-                if Wᶜ < W_ref
+                if (Wᶜ < W_ref) && !isorthogonal(laminate,𝐀)
                     W_ref = Wᶜ
                     l₁ = buffer.convex.grid[j-1]
                     l₂ = buffer.convex.grid[j]
@@ -1141,6 +1145,9 @@ function baltkernel(convexification::BALTConvexification, buffer::BALTBuffer, W:
     end
     return laminate
 end
+
+isorthogonal(laminate::Laminate, 𝐀::Tensor{2}) = laminate.A ⊡ 𝐀 == 0 #TODO fix this
+isorthogonal(laminate::Nothing, 𝐀::Tensor{2}) = false
 
 mutable struct BinaryAdaptiveLaminationTree{dim,T,N}
     F::Tensor{2,dim,T,N}
@@ -1165,7 +1172,7 @@ function BinaryAdaptiveLaminationTree(convexification::BALTConvexification, buff
     while !isempty(queue)
         parent, lc = pop!(queue)
         ξ = norm(parent.F - lc.F⁻) / norm(lc.F⁺ - lc.F⁻)
-        if isapprox(ξ,1.0,atol=1e-8) || isapprox(ξ,0.0,atol=1e-8)
+        if isapprox(ξ,1.0,atol=1e-10) || isapprox(ξ,0.0,atol=1e-10)
             continue
         end
         parent.minus = BinaryAdaptiveLaminationTree(lc.F⁻, lc.W⁻, (1.0 - ξ), level)
