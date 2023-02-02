@@ -856,7 +856,7 @@ end
 
 function ParametrizedR1Directions(::Val{2})
     rankdirs = Vector{Tuple{Vec{2,Int},Vec{2,Int}}}()
-    for i in -1:1, j in -1:1, m in 0:1, n in -1:1
+    for i in -1:1, j in -1:1, m in 0:1, n in 0:1
         if (i==j==0) || (m==n==0)
             continue
         else
@@ -1170,8 +1170,8 @@ function BinaryAdaptiveLaminationTree(convexification::BALTConvexification, buff
         end
         parent.minus = BinaryAdaptiveLaminationTree(lc.F⁻, lc.W⁻, (1.0 - ξ), level)
         parent.plus = BinaryAdaptiveLaminationTree(lc.F⁺, lc.W⁺, ξ, level)
-        level -= 1
-        if level > 1
+        level = parent.level - 1
+        if level > 0
             laminate⁺ = baltkernel(convexification,buffer,W,lc.F⁺,xargs...)
             laminate⁻ = baltkernel(convexification,buffer,W,lc.F⁻,xargs...)
             !(laminate⁺ === nothing) && push!(queue,(parent.plus, laminate⁺))
