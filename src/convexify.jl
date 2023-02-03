@@ -1130,7 +1130,7 @@ function baltkernel(convexification::BALTConvexification, buffer::BALTBuffer, W:
             if ((ctr_fw > 0) && (ctr_bw > 0))
                 concat!(buffer,ctr_fw+1,ctr_bw)
                 Wᶜ, j = convexify!(buffer,ctr_bw+ctr_fw)
-                if (Wᶜ < W_ref) && !isorthogonal(laminate,𝐀)
+                if (Wᶜ < W_ref) && !isapprox(Wᶜ,W_ref,atol=1e-8) # && !isorthogonal(laminate,𝐀)
                     W_ref = Wᶜ
                     l₁ = buffer.convex.grid[j-1]
                     l₂ = buffer.convex.grid[j]
@@ -1146,7 +1146,18 @@ function baltkernel(convexification::BALTConvexification, buffer::BALTBuffer, W:
     return laminate
 end
 
-isorthogonal(laminate::Laminate, 𝐀::Tensor{2}) = laminate.A ⊡ 𝐀 == 0 #TODO fix this
+rotation_matrix(θ) = Tensor{2,2}((cos(θ), sin(θ), -sin(θ), cos(θ)))
+function isorthogonal(laminate::Laminate, 𝐀::Tensor{2,2})
+    orthogonal = false
+    for θ in (π/2, -π/2)
+        Q = rotation_matrix(θ)
+        if isapprox(Q^-1 ⋅ laminate.A ⋅ Q, 𝐀, atol=1e-10)
+            orthogonal = true
+            break
+        end
+    end
+    return orthogonal
+end
 isorthogonal(laminate::Nothing, 𝐀::Tensor{2}) = false
 
 mutable struct BinaryAdaptiveLaminationTree{dim,T,N}
