@@ -1151,7 +1151,7 @@ function isorthogonal(laminate::Laminate, 𝐀::Tensor{2,2})
     orthogonal = false
     for θ in (π/2, -π/2)
         Q = rotation_matrix(θ)
-        if isapprox(Q^-1 ⋅ laminate.A ⋅ Q, 𝐀, atol=1e-10)
+        if isapprox(Q ⋅ laminate.A ⋅ Q', 𝐀, atol=1e-10)
             orthogonal = true
             break
         end
@@ -1165,11 +1165,13 @@ mutable struct BinaryAdaptiveLaminationTree{dim,T,N}
     W::T
     ξ::T
     level::Int
+    parent::Union{BinaryAdaptiveLaminationTree{dim,T,N},Nothing}
     minus::Union{BinaryAdaptiveLaminationTree{dim,T,N},Nothing}
     plus::Union{BinaryAdaptiveLaminationTree{dim,T,N},Nothing}
 end
 
-BinaryAdaptiveLaminationTree(F,W,ξ,l) = BinaryAdaptiveLaminationTree(F,W,ξ,l,nothing,nothing)
+BinaryAdaptiveLaminationTree(F,W,ξ,l) = BinaryAdaptiveLaminationTree(F,W,ξ,l,nothing,nothing,nothing)
+BinaryAdaptiveLaminationTree(F,W,ξ,l,parent) = BinaryAdaptiveLaminationTree(F,W,ξ,l,parent,nothing,nothing)
 
 function BinaryAdaptiveLaminationTree(convexification::BALTConvexification, buffer::BALTBuffer, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
     level = convexification.maxlevel
@@ -1186,8 +1188,8 @@ function BinaryAdaptiveLaminationTree(convexification::BALTConvexification, buff
         if isapprox(ξ,1.0,atol=1e-10) || isapprox(ξ,0.0,atol=1e-10)
             continue
         end
-        parent.minus = BinaryAdaptiveLaminationTree(lc.F⁻, lc.W⁻, (1.0 - ξ), level)
-        parent.plus = BinaryAdaptiveLaminationTree(lc.F⁺, lc.W⁺, ξ, level)
+        parent.minus = BinaryAdaptiveLaminationTree(lc.F⁻, lc.W⁻, (1.0 - ξ), level, parent)
+        parent.plus = BinaryAdaptiveLaminationTree(lc.F⁺, lc.W⁺, ξ, level, parent)
         level = parent.level - 1
         if level > 0
             laminate⁺ = baltkernel(convexification,buffer,W,lc.F⁺,xargs...)
@@ -1239,11 +1241,27 @@ function checkintegrity(tree::BinaryAdaptiveLaminationTree,tol=1e-4)
     return isintegre
 end
 
+function equilibrium(node,W::FUN,xargs::Vararg{Any,N}) where {FUN,N}
+   isroot(node) && return (0.0,children(node))
+   p = AbstractTrees.parent(node)
+   sibling = node == p.plus ? p.minus : p.plus
+   λ₁ = node.ξ; λ₂ = sibling.ξ
+   A = node == p.plus ? node.F - sibling.F : sibling.F - node.F
+   W⁺ = node == p.plus ? node.W : sibling.W
+   W⁻ = node == p.minus ? node.W : sibling.W
+   P₁ = Tensors.gradient(y->W(y,xargs...),node.F)
+   P₂ = Tensors.gradient(y->W(y,xargs...),sibling.F)
+   return ((W⁺-W⁻)-((λ₁*P₁+λ₂*P₂)⊡(A)),children(node))
+end
+
 AbstractTrees.printnode(io::IO, node::BinaryAdaptiveLaminationTree) = print(io, "$(node.F) ξ=$(node.ξ)")
+AbstractTrees.ParentLinks(::Type{<:BinaryAdaptiveLaminationTree}) = AbstractTrees.StoredParents()
+AbstractTrees.SiblingLinks(::Type{<:BinaryAdaptiveLaminationTree}) = AbstractTrees.ImplicitSiblings()
 Base.show(io::IO, ::MIME"text/plain", tree::BinaryAdaptiveLaminationTree) = AbstractTrees.print_tree(io, tree)
 Base.eltype(::Type{<:AbstractTrees.TreeIterator{BinaryAdaptiveLaminationTree{dim,T,N}}}) where {dim,T,N} = BinaryAdaptiveLaminationTree{dim,T,N}
 Base.IteratorEltype(::Type{<:AbstractTrees.TreeIterator{BinaryAdaptiveLaminationTree{dim,T,N}}}) where {dim,T,N} = Base.HasEltype()
 
+AbstractTrees.parent(node::BinaryAdaptiveLaminationTree) = node.parent
 function AbstractTrees.children(node::BinaryAdaptiveLaminationTree)
     if !isnothing(node.minus)
         if !isnothing(node.plus)
