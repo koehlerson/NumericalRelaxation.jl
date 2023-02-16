@@ -1107,112 +1107,6 @@ function inbounds(𝐱::Tensor{2,dimp,T,dimc}, convexification::BALTConvexificat
     return all(ntuple(i->convexification.startF[i] ≤ 𝐱[i] ≤ convexification.endF[i],dimc))
 end
 
-function baltkernel(root::BinaryAdaptiveLaminationTree, convexification::BALTConvexification, buffer::BALTBuffer, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
-    W_ref = W(F,xargs...)
-    _, _, W_glob_ref = eval(root,W,xargs...)
-    laminate = nothing
-    for (𝐚,𝐛) in convexification.dirs
-        fill!(buffer) # fill buffers with zeros
-        𝐀::Tensor{2,dim,T,N} = (𝐚 ⊗ 𝐛)
-        _δ = minimum(δ(convexification, 𝐀))
-        𝐀 *= _δ
-        if norm(𝐀,Inf) > 0
-            ctr_fw = 0
-            ctr_bw = 0
-            for dir in (-1, 1)
-                if dir==-1
-                    𝐱 = F - 𝐀 # init dir
-                    ell = -1 # start at -1, so - 𝐀
-                else
-                    𝐱 = F # init dir
-                    ell = 0 # start at 0
-                end
-                while inbounds(𝐱,convexification) && (convexification.GLcheck ? det(𝐱) > 1e-10 : true)
-                    val = W(𝐱,xargs...)
-                    if dir == 1
-                        buffer.forward_initial.values[ctr_fw+1] = val
-                        buffer.forward_initial.grid[ctr_fw+1] = ell
-                        ctr_fw += 1
-                    else
-                        buffer.backward_initial.values[ctr_bw+1] = val
-                        buffer.backward_initial.grid[ctr_bw+1] = ell
-                        ctr_bw += 1
-                    end
-                    𝐱 += dir*𝐀
-                    ell += dir
-                end
-            end
-            if ((ctr_fw > 0) && (ctr_bw > 0))
-                concat!(buffer,ctr_fw+1,ctr_bw)
-                Wᶜ, j = convexify!(buffer,ctr_bw+ctr_fw)
-                l₁ = buffer.convex.grid[j-1]
-                l₂ = buffer.convex.grid[j]
-                F⁻ = F + l₁*𝐀
-                F⁺ = F + l₂*𝐀
-                W⁻ = W(F⁻,xargs...)
-                W⁺ = W(F⁺,xargs...)
-                lc = Laminate(F⁻,F⁺,W⁻,W⁺,𝐀,0)
-                _, _, W_glob_trial = eval(root,F,lc,W,xargs...)
-                if (Wᶜ <= W_ref) || (W_glob_trial <= W_glob_ref)
-                    W_ref = Wᶜ
-                    W_glob_ref = W_glob_trial
-                    laminate = lc
-                end
-            end
-        end
-    end
-    return laminate
-end
-
-
-function laminatekernel(𝐀::Tensor{2,dim,T,N},convexification::BALTConvexification, buffer::BALTBuffer, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
-    W_ref = W(F,xargs...)
-    laminate = nothing
-    fill!(buffer) # fill buffers with zeros
-    _δ = minimum(δ(convexification, 𝐀))
-    𝐀 *= _δ
-    ctr_fw = 0
-    ctr_bw = 0
-    for dir in (-1, 1)
-        if dir==-1
-            𝐱 = F - 𝐀 # init dir
-            ell = -1 # start at -1, so - 𝐀
-        else
-            𝐱 = F # init dir
-            ell = 0 # start at 0
-        end
-        while inbounds(𝐱,convexification) && (convexification.GLcheck ? det(𝐱) > 1e-10 : true)
-            val = W(𝐱,xargs...)
-            if dir == 1
-                buffer.forward_initial.values[ctr_fw+1] = val
-                buffer.forward_initial.grid[ctr_fw+1] = ell
-                ctr_fw += 1
-            else
-                buffer.backward_initial.values[ctr_bw+1] = val
-                buffer.backward_initial.grid[ctr_bw+1] = ell
-                ctr_bw += 1
-            end
-            𝐱 += dir*𝐀
-            ell += dir
-        end
-    end
-    if ((ctr_fw > 0) && (ctr_bw > 0))
-        concat!(buffer,ctr_fw+1,ctr_bw)
-        Wᶜ, j = convexify!(buffer,ctr_bw+ctr_fw)
-        if (Wᶜ < W_ref) || isapprox(Wᶜ,W_ref,atol=1e-8) # && !isorthogonal(laminate,𝐀)
-            W_ref = Wᶜ
-            l₁ = buffer.convex.grid[j-1]
-            l₂ = buffer.convex.grid[j]
-            F⁻ = F + l₁*𝐀
-            F⁺ = F + l₂*𝐀
-            W⁻ = W(F⁻,xargs...)
-            W⁺ = W(F⁺,xargs...)
-            laminate = Laminate(F⁻,F⁺,W⁻,W⁺,𝐀,0)
-        end
-    end
-    return laminate
-end
-
 rotation_matrix(θ) = Tensor{2,2}((cos(θ), sin(θ), -sin(θ), cos(θ)))
 function isorthogonal(laminate::Laminate, 𝐀::Tensor{2,2})
     orthogonal = false
@@ -1313,6 +1207,111 @@ end
 
 function convexify(prev_bt::BinaryAdaptiveLaminationTree,balt::BALTConvexification, buffer::BALTBuffer, W::FUN, F::T1, xargs::Vararg{Any,XN}) where {T1,FUN,XN}
     return BinaryAdaptiveLaminationTree(prev_bt,balt,buffer,W,F,xargs...)
+end
+
+function baltkernel(root::BinaryAdaptiveLaminationTree, convexification::BALTConvexification, buffer::BALTBuffer, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
+    W_ref = W(F,xargs...)
+    𝔸_ref, _, W_glob_ref = eval(root,W,xargs...)
+    laminate = nothing
+    for (𝐚,𝐛) in convexification.dirs
+        fill!(buffer) # fill buffers with zeros
+        𝐀::Tensor{2,dim,T,N} = (𝐚 ⊗ 𝐛)
+        _δ = minimum(δ(convexification, 𝐀))
+        𝐀 *= _δ
+        if norm(𝐀,Inf) > 0
+            ctr_fw = 0
+            ctr_bw = 0
+            for dir in (-1, 1)
+                if dir==-1
+                    𝐱 = F - 𝐀 # init dir
+                    ell = -1 # start at -1, so - 𝐀
+                else
+                    𝐱 = F # init dir
+                    ell = 0 # start at 0
+                end
+                while inbounds(𝐱,convexification) && (convexification.GLcheck ? det(𝐱) > 1e-10 : true)
+                    val = W(𝐱,xargs...)
+                    if dir == 1
+                        buffer.forward_initial.values[ctr_fw+1] = val
+                        buffer.forward_initial.grid[ctr_fw+1] = ell
+                        ctr_fw += 1
+                    else
+                        buffer.backward_initial.values[ctr_bw+1] = val
+                        buffer.backward_initial.grid[ctr_bw+1] = ell
+                        ctr_bw += 1
+                    end
+                    𝐱 += dir*𝐀
+                    ell += dir
+                end
+            end
+            if ((ctr_fw > 0) && (ctr_bw > 0))
+                concat!(buffer,ctr_fw+1,ctr_bw)
+                Wᶜ, j = convexify!(buffer,ctr_bw+ctr_fw)
+                l₁ = buffer.convex.grid[j-1]
+                l₂ = buffer.convex.grid[j]
+                F⁻ = F + l₁*𝐀
+                F⁺ = F + l₂*𝐀
+                W⁻ = W(F⁻,xargs...)
+                W⁺ = W(F⁺,xargs...)
+                lc = Laminate(F⁻,F⁺,W⁻,W⁺,𝐀,0)
+                𝔸, _, W_glob_trial = eval(root,F,lc,W,xargs...)
+                if (Wᶜ <= W_ref) || (W_glob_trial <= W_glob_ref) || (𝐀 ⊡ 𝔸_ref ⊡ 𝐀 < 𝐀 ⊡ 𝔸 ⊡ 𝐀)
+                    W_ref = Wᶜ
+                    W_glob_ref = W_glob_trial
+                    laminate = lc
+                end
+            end
+        end
+    end
+    return laminate
+end
+
+function laminatekernel(𝐀::Tensor{2,dim,T,N},convexification::BALTConvexification, buffer::BALTBuffer, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
+    W_ref = W(F,xargs...)
+    laminate = nothing
+    fill!(buffer) # fill buffers with zeros
+    _δ = minimum(δ(convexification, 𝐀))
+    𝐀 *= _δ
+    ctr_fw = 0
+    ctr_bw = 0
+    for dir in (-1, 1)
+        if dir==-1
+            𝐱 = F - 𝐀 # init dir
+            ell = -1 # start at -1, so - 𝐀
+        else
+            𝐱 = F # init dir
+            ell = 0 # start at 0
+        end
+        while inbounds(𝐱,convexification) && (convexification.GLcheck ? det(𝐱) > 1e-10 : true)
+            val = W(𝐱,xargs...)
+            if dir == 1
+                buffer.forward_initial.values[ctr_fw+1] = val
+                buffer.forward_initial.grid[ctr_fw+1] = ell
+                ctr_fw += 1
+            else
+                buffer.backward_initial.values[ctr_bw+1] = val
+                buffer.backward_initial.grid[ctr_bw+1] = ell
+                ctr_bw += 1
+            end
+            𝐱 += dir*𝐀
+            ell += dir
+        end
+    end
+    if ((ctr_fw > 0) && (ctr_bw > 0))
+        concat!(buffer,ctr_fw+1,ctr_bw)
+        Wᶜ, j = convexify!(buffer,ctr_bw+ctr_fw)
+        if (Wᶜ < W_ref) || isapprox(Wᶜ,W_ref,atol=1e-8) # && !isorthogonal(laminate,𝐀)
+            W_ref = Wᶜ
+            l₁ = buffer.convex.grid[j-1]
+            l₂ = buffer.convex.grid[j]
+            F⁻ = F + l₁*𝐀
+            F⁺ = F + l₂*𝐀
+            W⁻ = W(F⁻,xargs...)
+            W⁺ = W(F⁺,xargs...)
+            laminate = Laminate(F⁻,F⁺,W⁻,W⁺,𝐀,0)
+        end
+    end
+    return laminate
 end
 
 function eval(node::BinaryAdaptiveLaminationTree{dim}, W_nonconvex::FUN, xargs::Vararg{Any,XN}) where {dim,FUN,XN}
