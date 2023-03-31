@@ -1169,9 +1169,7 @@ function BinaryAdaptiveLaminationTree(prev_bt::BinaryAdaptiveLaminationTree, con
     if prev_bt.plus === nothing && prev_bt.minus === nothing
         laminate = baltkernel(root,convexification,buffer,W,F,xargs...)
     else
-        start_𝐀 = prev_bt.plus.F - prev_bt.minus.F
-        start_𝐀 /= minimum(x->isapprox(abs(x),0,atol=1e-10) ? Inf : x, start_𝐀) #normalize direction and filter out zeros
-        start_𝐀 = Tensor{2,dim}((i,j)->round(start_𝐀[i,j]))
+        start_𝐀 = rankonedir(prev_bt)
         laminate = laminatekernel(start_𝐀,convexification,buffer,W,F,xargs...)
         if laminate === nothing # different direction yields a new laminate?
             laminate = baltkernel(root,convexification,buffer,W,F,xargs...)
@@ -1199,6 +1197,18 @@ function BinaryAdaptiveLaminationTree(prev_bt::BinaryAdaptiveLaminationTree, con
         end
     end
     return root
+end
+
+function rankonedir(node::BinaryAdaptiveLaminationTree{dim}) where dim
+    start_𝐀 = node.plus.F - node.minus.F
+    start_𝐀 /= minimum(x->isapprox(abs(x),0,atol=1e-10) ? Inf : x, start_𝐀) #normalize direction and filter out zeros
+    start_𝐀 = Tensor{2,dim}((i,j)->round(start_𝐀[i,j]))
+end
+
+function rankonedir(laminate::Laminate{dim}) where dim
+    start_𝐀 = laminate.F⁺ - laminate.F⁻
+    start_𝐀 /= minimum(x->isapprox(abs(x),0,atol=1e-10) ? Inf : x, start_𝐀) #normalize direction and filter out zeros
+    start_𝐀 = Tensor{2,dim}((i,j)->round(start_𝐀[i,j]))
 end
 
 function convexify(balt::BALTConvexification, buffer::BALTBuffer, W::FUN, F::T1, xargs::Vararg{Any,XN}) where {T1,FUN,XN}
@@ -1255,8 +1265,9 @@ function baltkernel(root::BinaryAdaptiveLaminationTree, convexification::BALTCon
                 W⁺ = W(F⁺,xargs...)
                 lc = Laminate(F⁻,F⁺,W⁻,W⁺,𝐀,0)
                 𝔸, _, W_glob_trial = eval(root,F,lc,W,xargs...)
-                if (Wᶜ <= W_ref) || (W_glob_trial <= W_glob_ref) || (𝐀 ⊡ 𝔸_ref ⊡ 𝐀 < 𝐀 ⊡ 𝔸 ⊡ 𝐀)
+                if (Wᶜ <= W_ref) #|| (W_glob_trial <= W_glob_ref) #|| (𝐀 ⊡ 𝔸_ref ⊡ 𝐀 < 𝐀 ⊡ 𝔸 ⊡ 𝐀)
                     W_ref = Wᶜ
+                    𝔸_ref = 𝔸
                     W_glob_ref = W_glob_trial
                     laminate = lc
                 end
@@ -1300,7 +1311,7 @@ function laminatekernel(𝐀::Tensor{2,dim,T,N},convexification::BALTConvexifica
     if ((ctr_fw > 0) && (ctr_bw > 0))
         concat!(buffer,ctr_fw+1,ctr_bw)
         Wᶜ, j = convexify!(buffer,ctr_bw+ctr_fw)
-        if (Wᶜ < W_ref) || isapprox(Wᶜ,W_ref,atol=1e-8) # && !isorthogonal(laminate,𝐀)
+        if (Wᶜ < W_ref) #|| isapprox(Wᶜ,W_ref,atol=1e-8) # && !isorthogonal(laminate,𝐀)
             W_ref = Wᶜ
             l₁ = buffer.convex.grid[j-1]
             l₂ = buffer.convex.grid[j]
@@ -1373,13 +1384,62 @@ function checkintegrity(tree::BinaryAdaptiveLaminationTree,tol=1e-4)
     return isintegre
 end
 
-function rotate(bt,θ)
+function rotation_tensor(F::Tensor{2})
+    n = 0
+    prev = one(F)
+    while !isapprox(prev,F)
+       n += 1
+       prev = F
+       F = 0.5*(F + inv(F)')
+    end
+    return F
+end
+
+function rotationangles(R::Tensor{2,2})
+    return acos(R[1])
+end
+
+function rotationangles(R::Tensor{2,3})
+    if R[3,1] != 1 || R[3,1] != -1
+        θ = -asin(R[3,1])
+        # θ₂ = π - θ ignored
+        ψ = atan(R[3,2]/cos(θ),R[3,3]/cos(θ))
+        ϕ = atan(R[2,1]/cos(θ),R[1,1]/cos(θ))
+    else
+        ϕ = 0
+        if R[3,1] == -1
+            θ = π/2
+            ψ = atan(R[1,2],R[1,3])
+        else
+            θ = -π/2
+            ψ = atan(-R[1,2],-R[1,3])
+        end
+    end
+    return (ψ,θ,ϕ)
+end
+
+function rotate!(bt::BinaryAdaptiveLaminationTree,args...)
+    for node in PreOrderDFS(bt)
+        node.F = Tensors.rotate(node.F,args...)
+    end
+end
+
+function rotate(bt::BinaryAdaptiveLaminationTree,args...)
     new_bt = deepcopy(bt)
-    Q = rotation_matrix(π/2)
-   for (old_node,new_node) in zip(PreOrderDFS(bt),PreOrderDFS(new_bt))
-       new_node.F = old_node.F ⋅ Q'
-   end
-   return new_bt
+    rotate!(new_bt,args...)
+    return new_bt
+end
+
+function rotationaverage(bt::BinaryAdaptiveLaminationTree{2},W::FUN,xargs::Vararg{Any,N}) where {FUN,N}
+    angle = rotation_tensor(bt.F) |> rotationangles
+    𝔸, 𝐏, W_val = eval(bt, W, xargs...)
+    bt_rotate = rotate(bt,0)
+    for α in (angle+pi, angle+pi/2, angle-pi/2, angle-pi)
+        rotate!(bt,α)
+        𝔸_r, 𝐏_r, W_r = eval(bt_rotate, W, xargs...)
+        𝔸 += 𝔸_r; 𝐏 += 𝐏_r; W_val += W_r
+    end
+    return 𝔸/4, 𝐏/4, W_val/4
 end
 
 function equilibrium(node,W::FUN,xargs::Vararg{Any,N}) where {FUN,N}
