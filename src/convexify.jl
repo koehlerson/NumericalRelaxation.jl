@@ -1434,12 +1434,13 @@ function rotationaverage(bt::BinaryAdaptiveLaminationTree{2},W::FUN,xargs::Varar
     angle = rotation_tensor(bt.F) |> rotationangles
     𝔸, 𝐏, W_val = eval(bt, W, xargs...)
     bt_rotate = rotate(bt,0)
-    for α in (angle+pi, angle+pi/2, angle-pi/2, angle-pi)
-        rotate!(bt,α)
+    angles = angle:pi/180:angle+pi
+    for α in angles
+        rotate!(bt_rotate,α)
         𝔸_r, 𝐏_r, W_r = eval(bt_rotate, W, xargs...)
         𝔸 += 𝔸_r; 𝐏 += 𝐏_r; W_val += W_r
     end
-    return 𝔸/4, 𝐏/4, W_val/4
+    return 𝔸/(length(angles)+1), 𝐏/(length(angles)+1), W_val/(length(angles)+1)
 end
 
 function equilibrium(node,W::FUN,xargs::Vararg{Any,N}) where {FUN,N}
