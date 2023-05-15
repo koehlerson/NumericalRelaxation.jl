@@ -17,6 +17,7 @@ export
     GradientGrid,
     GradientGridBuffered,
     ParametrizedR1Directions,
+    ParametrizedDDirections,
     ℛ¹Direction,
     ℛ¹DirectionBuffered,
     FlexibleLaminateTree

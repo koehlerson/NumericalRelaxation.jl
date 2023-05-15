@@ -850,8 +850,8 @@ Since they are quite small in 2² and 3² the directions are precomputed and sto
 # Fields
 - `dirs::Vector{Tuple{Vec{dimp,T},Vec{dimp,T}}}`
 """
-struct ParametrizedR1Directions{dimp,T} <: RankOneDirections{dimp}
-    dirs::Vector{Tuple{Vec{dimp,T},Vec{dimp,T}}}
+struct ParametrizedR1Directions{dimp,T,dimc} <: RankOneDirections{dimp}
+    dirs::Vector{Tensor{2,dimp,T,dimc}}
 end
 
 function ParametrizedR1Directions(::Val{2};l=1)
@@ -864,15 +864,8 @@ function ParametrizedR1Directions(::Val{2};l=1)
         end
     end
     dirs = [𝐚 ⊗ 𝐛 for (𝐚, 𝐛) in rankdirs]
-    uniqueidx = unique(i -> dirs[i], eachindex(dirs))
-    dirs = dirs[uniqueidx] #reduction from 64 to 32 dirs for l=1
-    rankdirs = rankdirs[uniqueidx]
-    for dir in dirs #reduction from 32 to 16 due to - later in convexification routines
-        idx = findfirst(x->-x ∈ dirs,dirs)
-        deleteat!(dirs,idx)
-        deleteat!(rankdirs,idx)
-    end
-    return ParametrizedR1Directions(rankdirs)
+    unique!(dirs)
+    return ParametrizedR1Directions(dirs)
 end
 
 function ParametrizedR1Directions(::Val{3};l=1)
@@ -885,15 +878,8 @@ function ParametrizedR1Directions(::Val{3};l=1)
         end
     end
     dirs = [𝐚 ⊗ 𝐛 for (𝐚, 𝐛) in rankdirs]
-    uniqueidx = unique(i -> dirs[i], eachindex(dirs))
-    dirs = dirs[uniqueidx] #reduction from 676 to 338 dirs for l=1
-    rankdirs = rankdirs[uniqueidx]
-    for dir in dirs #reduction from 338 to 169 due to - later in convexification routines
-        idx = findfirst(x->-x ∈ dirs,dirs)
-        deleteat!(dirs,idx)
-        deleteat!(rankdirs,idx)
-    end
-    return ParametrizedR1Directions(rankdirs)
+    unique!(dirs)
+    return ParametrizedR1Directions(dirs)
 end
 
 ParametrizedR1Directions(dimp::Int;l=1) = ParametrizedR1Directions(Val(dimp);l=l)
@@ -901,6 +887,27 @@ ParametrizedR1Directions(gradientgrid::GradientGrid{dimc}) where dimc = Parametr
 Base.iterate(d::ParametrizedR1Directions, state=1) = Base.iterate(d.dirs, state)
 Base.length(d::ParametrizedR1Directions) = length(d.dirs)
 
+struct ParametrizedDDirections{dimp,T,dimc} <: RankOneDirections{dimp}
+    dirs::Vector{Tensor{2,dimp,T,dimc}}
+end
+
+function ParametrizedDDirections(::Val{2};l=1)
+    rankdirs = Vector{Tensor{2,2,Float64,4}}()
+    for i in -l:l, j in -l:l, m in -l:l, n in -l:l
+        if (i==j==m==n==0)
+            continue
+        else
+            push!(rankdirs,Tensor{2,2}((i,j,m,n)))
+        end
+    end
+    unique!(rankdirs)
+    return ParametrizedDDirections(rankdirs)
+end
+
+ParametrizedDDirections(dimp::Int;l=1) = ParametrizedDDirections(Val(dimp);l=l)
+ParametrizedDDirections(gradientgrid::GradientGrid{dimc}) where dimc = ParametrizedDDirections(isqrt(dimc))
+Base.iterate(d::ParametrizedDDirections, state=1) = Base.iterate(d.dirs, state)
+Base.length(d::ParametrizedDDirections) = length(d.dirs)
 
 @doc raw"""
     R1Convexification{dimp,dimc,dirtype<:RankOneDirections{dimp},T1,T2,R} <: Convexification
@@ -1096,11 +1103,11 @@ function build_buffer(convexification::BALTConvexification{dimp,R1Dir,T}) where 
     return BALTBuffer(buffer,deepcopy(buffer),deepcopy(buffer),deepcopy(buffer),deepcopy(buffer),deepcopy(buffer))
 end
 
-function δ(convexification::BALTConvexification{dimp,R1Dir,T},A::Tensor{2,dimp,T,dimc}) where {dimp,R1Dir<:RankOneDirections{dimp},T,dimc}
+function δ(convexification::BALTConvexification{dimp,R1Dir,T1},A::Tensor{2,dimp,T2,dimc}) where {dimp,R1Dir<:RankOneDirections{dimp},T1,T2,dimc}
     startF = convexification.startF
     endF = convexification.endF
     newvals = ntuple(i->A[i] != 0 ? (endF[i] - startF[i])/convexification.n_convexpoints : Inf,dimc)
-    return Tensor{2,dimp,T,dimc}(newvals)
+    return Tensor{2,dimp,T1,dimc}(newvals)
 end
 
 function inbounds(𝐱::Tensor{2,dimp,T,dimc}, convexification::BALTConvexification) where {dimp,T,dimc}
@@ -1223,9 +1230,9 @@ function baltkernel(root::BinaryAdaptiveLaminationTree, convexification::BALTCon
     W_ref = W(F,xargs...)
     𝔸_ref, _, W_glob_ref = eval(root,W,xargs...)
     laminate = nothing
-    for (𝐚,𝐛) in convexification.dirs
+    for 𝐀 in convexification.dirs
         fill!(buffer) # fill buffers with zeros
-        𝐀::Tensor{2,dim,T,N} = (𝐚 ⊗ 𝐛)
+        #𝐀::Tensor{2,dim,T,N} = (𝐚 ⊗ 𝐛)
         _δ = minimum(δ(convexification, 𝐀))
         𝐀 *= _δ
         if norm(𝐀,Inf) > 0
