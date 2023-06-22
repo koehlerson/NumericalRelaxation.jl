@@ -1173,15 +1173,15 @@ end
 function BinaryAdaptiveLaminationTree(prev_bt::BinaryAdaptiveLaminationTree, convexification::BALTConvexification, buffer::BALTBuffer, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
     level = convexification.maxlevel
     root = BinaryAdaptiveLaminationTree(F, 0.0, 1.0, level + 1)
-    if prev_bt.plus === nothing && prev_bt.minus === nothing
+    #if prev_bt.plus === nothing && prev_bt.minus === nothing
         laminate = baltkernel(root,convexification,buffer,W,F,xargs...)
-    else
-        start_𝐀 = rankonedir(prev_bt)
-        laminate = laminatekernel(start_𝐀,convexification,buffer,W,F,xargs...)
-        if laminate === nothing # different direction yields a new laminate?
-            laminate = baltkernel(root,convexification,buffer,W,F,xargs...)
-        end
-    end
+    #else
+    #    start_𝐀 = rankonedir(prev_bt)
+    #    laminate = laminatekernel(start_𝐀,convexification,buffer,W,F,xargs...)
+    #    if laminate === nothing # different direction yields a new laminate?
+    #        laminate = baltkernel(root,convexification,buffer,W,F,xargs...)
+    #    end
+    #end
     if laminate === nothing
         return root
     end
@@ -1193,14 +1193,37 @@ function BinaryAdaptiveLaminationTree(prev_bt::BinaryAdaptiveLaminationTree, con
         if isapprox(ξ,1.0,atol=1e-10) || isapprox(ξ,0.0,atol=1e-10)
             continue
         end
-        parent.minus = BinaryAdaptiveLaminationTree(lc.F⁻, lc.W⁻, (1.0 - ξ), level, parent)
-        parent.plus = BinaryAdaptiveLaminationTree(lc.F⁺, lc.W⁺, ξ, level, parent)
-        level = parent.level - 1
-        if level > 0
-            laminate⁺ = baltkernel(root,convexification,buffer,W,lc.F⁺,xargs...)
-            laminate⁻ = baltkernel(root,convexification,buffer,W,lc.F⁻,xargs...)
-            !(laminate⁺ === nothing) && push!(queue,(parent.plus, laminate⁺))
-            !(laminate⁻ === nothing) && push!(queue,(parent.minus,laminate⁻))
+        dirsvd = svd(lc.F⁻ - lc.F⁺) 
+        dirrank = count(x -> x > 1e-8, dirsvd.S)
+        if dirrank == 1
+            parent.minus = BinaryAdaptiveLaminationTree(lc.F⁻, lc.W⁻, (1.0 - ξ), level, parent)
+            parent.plus = BinaryAdaptiveLaminationTree(lc.F⁺, lc.W⁺, ξ, level, parent)
+            level = parent.level - 1
+            if level > 0
+                laminate⁺ = baltkernel(root,convexification,buffer,W,lc.F⁺,xargs...)
+                laminate⁻ = baltkernel(root,convexification,buffer,W,lc.F⁻,xargs...)
+                !(laminate⁺ === nothing) && push!(queue,(parent.plus, laminate⁺))
+                !(laminate⁻ === nothing) && push!(queue,(parent.minus,laminate⁻))
+            end
+        else
+            decompositionstack = [(parent,1,1)]
+            n = 1
+            while !isempty(decompositionstack)
+                pivotnode, pivot_i, depth = pop!(decompositionstack)
+                pivot_i = pivot_i > dirrank ? pivot_i % dirrank : pivot_i
+                (depth > n+1) && continue
+                ui = Vec{dim}(abs.(@view(dirsvd.U[:,pivot_i])))
+                vi = Vec{dim}(abs.(@view(dirsvd.Vt[:,pivot_i])))
+                si = dirsvd.S[pivot_i]
+                A = ui ⊗ vi
+                F⁻ = pivotnode.F - (pivotnode.F ⋅ A) + (lc.F⁻ ⋅ A)/n
+                F⁺ = pivotnode.F - (pivotnode.F ⋅ A) + (lc.F⁺ ⋅ A)/n
+                ξ = norm(pivotnode.F - F⁻) / norm(F⁺ - F⁻)
+                pivotnode.minus = BinaryAdaptiveLaminationTree(F⁻, W(F⁻,xargs...), (1.0 - ξ), level, pivotnode)
+                pivotnode.plus = BinaryAdaptiveLaminationTree(F⁺, W(F⁺,xargs...), ξ, level, pivotnode)
+                push!(decompositionstack,(pivotnode.plus, pivot_i+1,depth+1))
+                push!(decompositionstack,(pivotnode.minus,pivot_i+1,depth+1))
+            end
         end
     end
     return root
