@@ -1179,7 +1179,7 @@ function BinaryAdaptiveLaminationTree(prev_bt::BinaryAdaptiveLaminationTree, con
         start_𝐀 = rankonedir(prev_bt)
         laminate = laminatekernel(start_𝐀,convexification,buffer,W,F,xargs...)
         if laminate === nothing # different direction yields a new laminate?
-            laminate = baltkernel(root,convexification,buffer,W,F,xargs...)
+           laminate = baltkernel(root,convexification,buffer,W,F,xargs...)
         end
     end
     if laminate === nothing
@@ -1249,6 +1249,16 @@ function convexify(prev_bt::BinaryAdaptiveLaminationTree,balt::BALTConvexificati
     return BinaryAdaptiveLaminationTree(prev_bt,balt,buffer,W,F,xargs...)
 end
 
+function stretchfilter(F)
+    C = tdot(F)
+    eigen_ = eigen(C)
+    if !all(eigen_.values .> 0)
+        return zero(F)
+    else
+        return sqrt(C)
+    end
+end
+
 function baltkernel(root::BinaryAdaptiveLaminationTree, convexification::BALTConvexification, buffer::BALTBuffer, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
     W_ref = W(F,xargs...)
     𝔸_ref, _, W_glob_ref = eval(root,W,xargs...)
@@ -1263,13 +1273,15 @@ function baltkernel(root::BinaryAdaptiveLaminationTree, convexification::BALTCon
             ctr_bw = 0
             for dir in (-1, 1)
                 if dir==-1
-                    𝐱 = F - 𝐀 # init dir
+                    𝐱_prefilter = F - 𝐀 # init dir
+                    𝐱 = stretchfilter(F - 𝐀) # init dir
                     ell = -1 # start at -1, so - 𝐀
                 else
-                    𝐱 = F # init dir
+                    𝐱_prefilter = F # init dir
+                    𝐱 = stretchfilter(F) # init dir
                     ell = 0 # start at 0
                 end
-                while inbounds(𝐱,convexification) && (convexification.GLcheck ? det(𝐱) > 1e-10 : true)
+                while inbounds(𝐱_prefilter,convexification) && (convexification.GLcheck ? det(𝐱) > 1e-8 : true)
                     val = W(𝐱,xargs...)
                     if dir == 1
                         buffer.forward_initial.values[ctr_fw+1] = val
@@ -1280,7 +1292,8 @@ function baltkernel(root::BinaryAdaptiveLaminationTree, convexification::BALTCon
                         buffer.backward_initial.grid[ctr_bw+1] = ell
                         ctr_bw += 1
                     end
-                    𝐱 += dir*𝐀
+                    𝐱_prefilter += dir*𝐀
+                    𝐱 = stretchfilter(𝐱_prefilter)
                     ell += dir
                 end
             end
@@ -1465,12 +1478,16 @@ function rotationaverage(bt::BinaryAdaptiveLaminationTree{2},W::FUN,xargs::Varar
     𝔸, 𝐏, W_val = eval(bt, W, xargs...)
     bt_rotate = rotate(bt,0)
     angles = angle:pi/180:angle+pi
+    counter = 1
     for α in angles
         rotate!(bt_rotate,α)
         𝔸_r, 𝐏_r, W_r = eval(bt_rotate, W, xargs...)
-        𝔸 += 𝔸_r; 𝐏 += 𝐏_r; W_val += W_r
+        if isapprox(W_r,W_val,atol=1e-5)
+            𝔸 += 𝔸_r; 𝐏 += 𝐏_r; W_val += W_r
+            counter += 1
+        end
     end
-    return 𝔸/(length(angles)+1), 𝐏/(length(angles)+1), W_val/(length(angles)+1)
+    return 𝔸/counter, 𝐏/counter, W_val/counter
 end
 
 function equilibrium(node,W::FUN,xargs::Vararg{Any,N}) where {FUN,N}
