@@ -1273,15 +1273,15 @@ function baltkernel(root::BinaryAdaptiveLaminationTree, convexification::BALTCon
             ctr_bw = 0
             for dir in (-1, 1)
                 if dir==-1
-                    𝐱_prefilter = F - 𝐀 # init dir
-                    𝐱 = stretchfilter(F - 𝐀) # init dir
+                    #𝐱_prefilter = F - 𝐀 # init dir
+                    𝐱 = F - 𝐀 # init dir
                     ell = -1 # start at -1, so - 𝐀
                 else
-                    𝐱_prefilter = F # init dir
-                    𝐱 = stretchfilter(F) # init dir
+                    #𝐱_prefilter = F # init dir
+                    𝐱 = F # init dir
                     ell = 0 # start at 0
                 end
-                while inbounds(𝐱_prefilter,convexification) && (convexification.GLcheck ? det(𝐱) > 1e-8 : true)
+                while inbounds(𝐱,convexification) && (convexification.GLcheck ? det(𝐱) > 1e-8 : true)
                     val = W(𝐱,xargs...)
                     if dir == 1
                         buffer.forward_initial.values[ctr_fw+1] = val
@@ -1292,8 +1292,7 @@ function baltkernel(root::BinaryAdaptiveLaminationTree, convexification::BALTCon
                         buffer.backward_initial.grid[ctr_bw+1] = ell
                         ctr_bw += 1
                     end
-                    𝐱_prefilter += dir*𝐀
-                    𝐱 = stretchfilter(𝐱_prefilter)
+                    𝐱 += dir*𝐀
                     ell += dir
                 end
             end
@@ -1475,19 +1474,20 @@ end
 
 function rotationaverage(bt::BinaryAdaptiveLaminationTree{2},W::FUN,xargs::Vararg{Any,N}) where {FUN,N}
     angle = rotation_tensor(bt.F) |> rotationangles
-    𝔸, 𝐏, W_val = eval(bt, W, xargs...)
+    𝔸, 𝐏, W_ref = eval(bt, W, xargs...)
     bt_rotate = rotate(bt,0)
     angles = angle:pi/180:angle+pi
     counter = 1
     for α in angles
         rotate!(bt_rotate,α)
         𝔸_r, 𝐏_r, W_r = eval(bt_rotate, W, xargs...)
-        if isapprox(W_r,W_val,atol=1e-5)
-            𝔸 += 𝔸_r; 𝐏 += 𝐏_r; W_val += W_r
+        if isapprox(W_r,W_ref)
+            𝔸 += 𝔸_r; 𝐏 += 𝐏_r; W_ref += W_r
             counter += 1
         end
+        rotate!(bt_rotate,-α) #rotate back
     end
-    return 𝔸/counter, 𝐏/counter, W_val/counter
+    return 𝔸/counter, 𝐏/counter, W_ref/counter
 end
 
 function equilibrium(node,W::FUN,xargs::Vararg{Any,N}) where {FUN,N}
