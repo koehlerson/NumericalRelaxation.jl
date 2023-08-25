@@ -1473,10 +1473,10 @@ function rotate(bt::BinaryAdaptiveLaminationTree,args...)
 end
 
 function rotationaverage(bt::BinaryAdaptiveLaminationTree{2},W::FUN,xargs::Vararg{Any,N}) where {FUN,N}
-    angle = rotation_tensor(bt.F) |> rotationangles
+    #angle = rotation_tensor(bt.F) |> rotationangles
     𝔸, 𝐏, W_ref = eval(bt, W, xargs...)
     bt_rotate = rotate(bt,0)
-    angles = angle:pi/180:angle+pi
+    angles = pi/180:pi/180:pi
     counter = 1
     for α in angles
         rotate!(bt_rotate,α)
