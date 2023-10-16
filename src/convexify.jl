@@ -737,6 +737,87 @@ function getaxes(defomesh::GradientGridBuffered{dimc}) where dimc
 end
 
 
+@doc raw"""
+    SingularValueGrid{dimc,T,R<:AbstractRange{T}}
+
+# Fields
+- `axes::NTuple{dimc,R}`
+- `indices::CartesianIndices{dimc,NTuple{dimc,Base.OneTo{Int64}}}`
+"""
+struct SingularValueGrid{dimc,T,R<:AbstractRange{T}}
+    axes::NTuple{dimc,R}
+    indices::CartesianIndices{dimc,NTuple{dimc,Base.OneTo{Int64}}}
+end
+
+function SingularValueGrid(axes::NTuple{dimc}) where dimc
+    indices = CartesianIndices(ntuple(x->length(axes[x]),dimc))
+    return SingularValueGrid(axes,indices)
+end
+
+function Base.size(gradientgrid::SingularValueGrid{dimc}, axes::Int) where dimc
+    @assert dimc ≥ axes
+    return length(gradientgrid.axes[axes])
+end
+
+function Base.size(gradientgrid::SingularValueGrid{dimc}) where dimc
+    NTuple{dimc,Int}(size(gradientgrid,dim) for dim in 1:dimc)
+end
+
+function Base.length(b::SingularValueGrid{dimc}) where dimc
+    _size::Int = size(b,1)
+    for i in 2:dimc
+        _size *= size(b,i)
+    end
+    return _size
+end
+
+getindex_type(b::SingularValueGrid{2,T}) where {T} = Tensor{2,2,T,4}
+getindex_type(b::SingularValueGrid{3,T}) where {T} = Tensor{2,3,T,9}
+
+function Base.getindex(b::SingularValueGrid{dimc,T},args...) where {dimc,T}
+    @assert length(args) == dimc
+    content = NTuple{dimc,T}(b.axes[x][args[x]] for x in 1:dimc)
+    return diagm(getindex_type(b),content)
+end
+
+function Base.getindex(b::SingularValueGrid{dimc,T},idx) where {dimc,T}
+    content = NTuple{dimc,T}(b.axes[x][idx[x]] for x in 1:dimc)
+    return diagm(getindex_type(b),content)
+end
+
+function Base.getindex(b::SingularValueGrid{dimc,T},idx::Int) where {dimc,T}
+    ind = b.indices[idx]
+    return b[ind]
+end
+
+Base.lastindex(b::SingularValueGrid) = length(b)
+Base.firstindex(b::SingularValueGrid) = 1
+Base.axes(b::SingularValueGrid,d::Int) = Base.OneTo(length(b.axes[d]))
+Base.eltype(b::SingularValueGrid) = getindex_type(b)
+
+Base.IteratorSize(b::SingularValueGrid{dimc}) where {dimc} = Base.HasShape{dimc}()
+
+function Base.iterate(b::SingularValueGrid, state=1)
+    if state <= length(b)
+        return (b[state], state+1)
+    else
+        return nothing
+    end
+end
+
+δ(b::SingularValueGrid{dimc,T}, axes::Int) where {dimc,T} = T(b.axes[axes].step)
+δ(b::SingularValueGrid{dimc}) where {dimc} = minimum(ntuple(x->δ(b,x),dimc))
+center(b::SingularValueGrid{dimc,T}) where {dimc,T} = diagm(getindex_type(b),(ntuple(x->radius(b,x)+b.axes[x][1], dimc)))
+radius(b::SingularValueGrid, axes::Int) = (b.axes[axes][end] - b.axes[axes][1])/2
+radius(b::SingularValueGrid{dimc}) where {dimc} = maximum(ntuple(x->radius(b,x),dimc))
+getaxes(defomesh::SingularValueGrid) = defomesh.axes
+
+# assume 𝐱 is in SVD space
+function inbounds(𝐱::Tensor{2,dimp,T},b::SingularValueGrid{dimc,T}) where {dimp,dimc,T}
+    inbound = ntuple(i->b.axes[i][1] ≤ 𝐱[i,i] ≤ b.axes[i][end],dimc)
+    return all(inbound)
+end
+
 ##################################
 #### Rank One Direction Space ####
 ##################################
@@ -798,7 +879,7 @@ Base.lastindex(d::ℛ¹Direction) = size(d)
 Base.firstindex(d::ℛ¹Direction) = 1
 
 function Base.getindex(d::ℛ¹Direction{dimp},idx) where {dimp}
-    return Vec{dimp,Int}(NTuple{dimp,Int}(d.a_axes[x][idx[x]] for x in 1:dimp)),Vec{dimp,Int}(NTuple{dimp,Int}(d.b_axes[x][idx[(x + dimp)]] for x in 1:dimp))
+    return Vec{dimp,Int}(NTuple{dimp,Int}(d.a_axes[x][idx[x]] for x in 1:dimp)) ⊗ Vec{dimp,Int}(NTuple{dimp,Int}(d.b_axes[x][idx[(x + dimp)]] for x in 1:dimp))
 end
 
 function Base.getindex(d::ℛ¹Direction,idx::Int)
@@ -923,7 +1004,7 @@ Bundles rank-one direction discretization as well as a tolerance and the convexi
 - `tol::T1`
 """
 struct R1Convexification{dimp,dimc,dirtype<:RankOneDirections{dimp},T,R} <: AbstractConvexification
-    grid::GradientGrid{dimc,T,R}
+    grid::Union{GradientGrid{dimc,T,R},SingularValueGrid{dimc,T,R}}
     dirs::dirtype
     tol::T
 end
@@ -939,7 +1020,7 @@ function build_buffer(r1convexification::R1Convexification{dimp,dimc,dirtype,T})
     gradientgrid = r1convexification.grid
     _δ = δ(gradientgrid)
     _r = radius(gradientgrid)
-    max_gx = ceil(Int,((2*_r))/_δ^3) + dimp^2
+    max_gx = ceil(Int,((2*_r))/_δ^3) + dimp^2 + 100
     buffer = [R1ConvexificationThreadBuffer(dimp,max_gx) for i in 1:Threads.nthreads()]
     W_rk1 = linear_interpolation(getaxes(gradientgrid),zeros(size(gradientgrid)),extrapolation_bc=Interpolations.Flat())
     W_rk1_old = deepcopy(W_rk1)
@@ -980,9 +1061,9 @@ function convexify!(r1convexification::R1Convexification,r1buffer::R1Convexifica
             g_fw = threadbuffer[id].g_fw; g_bw = threadbuffer[id].g_bw; X_fw = threadbuffer[id].X_fw; X_bw = threadbuffer[id].X_bw
             X = threadbuffer[id].X; g = threadbuffer[id].g; h = threadbuffer[id].h; y = threadbuffer[id].y;
             buildtree && (partiallaminatetree = threadbuffer[id].partiallaminatetree)
-            for (𝐚,𝐛) in directions
-                if inbounds_𝐚(gradientgrid,𝐚) && inbounds_𝐛(gradientgrid,𝐛)
-                    𝐀 = _δ^3 * (𝐚 ⊗ 𝐛) # ^3 sollte für jede Dimension richtig sein
+            for 𝐀 in directions
+                if true # TODO ersetzen mit inbounds_𝐚(gradientgrid,𝐚) && inbounds_𝐛(gradientgrid,𝐛) aber für 𝐀
+                    𝐀 = _δ^3 * (𝐀) # ^3 sollte für jede Dimension richtig sein
                     if norm(𝐀,Inf) > 0
                         ctr_fw = 0
                         ctr_bw = 0
@@ -994,8 +1075,9 @@ function convexify!(r1convexification::R1Convexification,r1buffer::R1Convexifica
                                 𝐱 = 𝐅 # init dir
                                 ell = 0 # start bei 0
                             end
-                            while inbounds(𝐱,gradientgrid)
-                                val = W_rk1_old(𝐱...)
+                            𝐱_svd = diagm(Tensor{2,2},svd(𝐱).S)
+                            while inbounds(𝐱_svd,gradientgrid) && all(x->x ≥ 0,𝐱_svd)
+                                val = W_rk1_old(𝐱_svd[1,1],𝐱_svd[2,2])
                                 if dir == 1
                                     g_fw[ctr_fw+1] = val
                                     X_fw[ctr_fw+1] = ell
@@ -1006,6 +1088,7 @@ function convexify!(r1convexification::R1Convexification,r1buffer::R1Convexifica
                                     ctr_bw += 1
                                 end
                                 𝐱 += dir*𝐀
+                                𝐱_svd = diagm(Tensor{2,2},svd(𝐱).S)
                                 ell += dir
                             end
                         end
@@ -1020,8 +1103,8 @@ function convexify!(r1convexification::R1Convexification,r1buffer::R1Convexifica
                                     l₂ = y[j]
                                     F¯ = 𝐅 + l₁*𝐀
                                     F⁺ = 𝐅 + l₂*𝐀
-                                    W¯ = W_rk1_old(F¯...)
-                                    W⁺ = W_rk1_old(F⁺...)
+                                    W¯ = W_rk1_old(F¯[1,1],F¯[2,2])
+                                    W⁺ = W_rk1_old(F⁺[1,1],F⁺[2,2])
                                     laminate = Laminate(F¯,F⁺,W¯,W⁺,𝐀,k)
                                     if haskey(partiallaminatetree,lin_ind_𝐅) # check if thread laminate tree has key 𝐅
                                         if isassigned(partiallaminatetree[lin_ind_𝐅],k) # check if thread laminate tree has already k-level laminates

@@ -98,13 +98,25 @@ end
     @test @inferred(size(gradientgrid3,1)) == size(gradientgrid3,4) == length(gradientgrid_axes_diag)
     @test size(gradientgrid3,1) == @inferred(size(gradientgrid3,4)) == length(gradientgrid_axes_diag)
     @test size(gradientgrid3,1) == size(gradientgrid3,4) == @inferred(length(gradientgrid_axes_diag))
+
+    gradientgrid_axes_diag = 1.0:0.1:2
+    gradientgrid = SingularValueGrid((gradientgrid_axes_diag, gradientgrid_axes_diag))
+    @test size(gradientgrid) == (length(gradientgrid_axes_diag),length(gradientgrid_axes_diag))
+    @test size(gradientgrid,1) == size(gradientgrid,2) == length(gradientgrid_axes_diag)
+    @test NumericalRelaxation.center(gradientgrid) == Tensor{2,2}((1.5,0.0,0.0,1.5))
+    @test NumericalRelaxation.δ(gradientgrid) == 0.1
+    @test NumericalRelaxation.radius(gradientgrid) == 0.5
+    @test @inferred(gradientgrid[1,1]) == Tensor{2,2}((1.0,0.0,0.0,1.0))
+    @test @inferred(Union{Tensor{2,2},Nothing}, Base.iterate(gradientgrid,1)) == (Tensor{2,2}((1.0,0.0,0.0,1.0)),2)
+    @test @inferred(Union{Tensor{2,2},Nothing}, Base.iterate(gradientgrid,100000)) === nothing
+    @test @inferred(NumericalRelaxation.center(gradientgrid)) == Tensor{2,2}((1.5,0.0,0.0,1.5))
 end
 
 @testset "Rank One Direction Iterator" begin
     gradientgrid_axes = -2.0:0.5:2
     gradientgrid1 = GradientGrid((gradientgrid_axes, gradientgrid_axes, gradientgrid_axes, gradientgrid_axes))
     dirs = ParametrizedR1Directions(2)
-    @test(@inferred Union{Nothing,Tuple{Tuple{Vec{2,Int},Vec{2,Int}},Int}} Base.iterate(dirs,1) == ((Vec{2}((-1,-1)),Vec{2}((0,-1))),2))
+    @test(@inferred(Union{Nothing,Tuple{Matrix{Int},Int}}, Base.iterate(dirs,1)) == ([1 1; 1 1],2))
     ((𝐚,𝐛),i) = Base.iterate(dirs,1)
     @test @inferred(NumericalRelaxation.inbounds_𝐚(gradientgrid1,𝐚)) && @inferred(NumericalRelaxation.inbounds_𝐛(gradientgrid1,𝐛))
 end
@@ -160,14 +172,15 @@ end
         end
 
         @testset "Type stability" begin
-            laminate = @inferred Nothing NumericalRelaxation.baltkernel(convexification,buffer,W_multi,zero(Tensor{2,dim}))
+            root = NumericalRelaxation.BinaryAdaptiveLaminationTree(zero(Tensor{2,dim}), 0.0, 1.0, 0 + 1)
+            laminate = @inferred Nothing NumericalRelaxation.baltkernel(root,convexification,buffer,W_multi,zero(Tensor{2,dim}))
             @test laminate.W⁺ == laminate.W⁻ && isapprox(laminate.W⁺,0.0,atol=1e-4) && isapprox(laminate.W⁻,0.0,atol=1e-4)
             if dim ==2
-                @test laminate.F⁺ == Tensor{2,dim}([0.0 1.0; 0.0 0.0])
-                @test laminate.F⁻ == Tensor{2,dim}([0.0 -1.0; 0.0 0.0])
+                @test laminate.F⁺ == Tensor{2,dim}([0.0 0.0; -1.0 0.0])
+                @test laminate.F⁻ == Tensor{2,dim}([0.0 0.0; 1.0 0.0])
             else
-                @test laminate.F⁺ == Tensor{2,dim}([0.0 1.0 0.0; 0.0 0.0 0.0; 0.0 0.0 0.0])
-                @test laminate.F⁻ == Tensor{2,dim}([0.0 -1.0 0.0; 0.0 0.0 0.0; 0.0 0.0 0.0])
+                @test laminate.F⁺ == Tensor{2,dim}([0.0 0.0 0.0; 0.0 0.0 0.0; -1.0 0.0 0.0])
+                @test laminate.F⁻ == Tensor{2,dim}([0.0 0.0 0.0; 0.0 0.0 0.0; 1.0 0.0 0.0])
             end
         end
     end

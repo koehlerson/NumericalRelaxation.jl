@@ -16,6 +16,7 @@ export
 #higher dimensional entities
     GradientGrid,
     GradientGridBuffered,
+    SingularValueGrid,
     ParametrizedR1Directions,
     ParametrizedDDirections,
     ℛ¹Direction,
