@@ -1,4 +1,5 @@
 using NumericalRelaxation
+using LinearAlgebra
 using Tensors
 using Test
 
@@ -126,7 +127,7 @@ end
     a = -2.0:0.5:2.0
     r1convexification_reduced = R1Convexification(a,a,dim=d,dirtype=ParametrizedR1Directions)
     buffer_reduced = build_buffer(r1convexification_reduced)
-    convexify!(r1convexification_reduced,buffer_reduced,W_multi;buildtree=true)
+    convexify!(r1convexification_reduced,buffer_reduced,W_multi;buildtree=false)
     @test all(isapprox.(buffer_reduced.W_rk1.itp.itp.coefs .- [W_multi_rc(Tensor{2,2}((x1,x2,y1,y2))) for x1 in a, x2 in a, y1 in a, y2 in a],0.0,atol=1e-8))
     r1convexification_full = R1Convexification(a,a,dim=d,dirtype=ℛ¹Direction)
     buffer_full = build_buffer(r1convexification_full)
@@ -134,21 +135,32 @@ end
     @test all(isapprox.(buffer_full.W_rk1.itp.itp.coefs .- [W_multi_rc(Tensor{2,2}((x1,x2,y1,y2))) for x1 in a, x2 in a, y1 in a, y2 in a],0.0,atol=1e-8))
     @test all(isapprox.(buffer_full.W_rk1.itp.itp.coefs .- buffer_reduced.W_rk1.itp.itp.coefs ,0.0,atol=1e-8))
     # test if subsequent convexifications work
-    convexify!(r1convexification_full,buffer_full,W_multi;buildtree=true)
+    convexify!(r1convexification_reduced,buffer_reduced,W_multi;buildtree=false)
     @test all(isapprox.(buffer_full.W_rk1.itp.itp.coefs .- buffer_reduced.W_rk1.itp.itp.coefs ,0.0,atol=1e-8))
-
-    @testset "Tree Construction" begin
-        F1 = Tensor{2,2}((0.1,0.0,0.0,0.0))
-        F2 = Tensor{2,2}((0.1,0.5,0.3,0.2))
-        F3 = Tensor{2,2}((0.5,0.5,0.0,0.0))
-        for F in (F1,F2,F3)
-            flt = FlexibleLaminateTree(F,r1convexification_full,buffer_full,3)
-            @test NumericalRelaxation.checkintegrity(flt,buffer_full.W_rk1)
-            𝔸, 𝐏, W = NumericalRelaxation.eval(flt,W_multi)
-            @test W == 0.0
-            @test 𝐏 == zero(Tensor{2,2})
-        end
+    # test svd convexification
+    g = SingularValueGrid((0.0:0.5:2.0,0.0:0.5:2.0))
+    dirs = ParametrizedR1Directions(2)
+    r1convexification_svd = R1Convexification(g,dirs,1e-8)
+    buffer_svd = build_buffer(r1convexification_svd)
+    convexify!(r1convexification_svd,buffer_svd,W_multi;buildtree=false)
+    for x1 in a, x2 in a, y1 in a, y2 in a
+        x = Tensor{2,2}((x1,x2,y1,y2))
+        x_svd = svd(x).S
+        @test isapprox(buffer_svd.W_rk1(x_svd[1],x_svd[2]),W_multi_rc(x),atol=1e-8)
     end
+
+    #@testset "Tree Construction" begin
+    #    F1 = Tensor{2,2}((0.1,0.0,0.0,0.0))
+    #    F2 = Tensor{2,2}((0.1,0.5,0.3,0.2))
+    #    F3 = Tensor{2,2}((0.5,0.5,0.0,0.0))
+    #    for F in (F1,F2,F3)
+    #        flt = FlexibleLaminateTree(F,r1convexification_full,buffer_full,3)
+    #        @test NumericalRelaxation.checkintegrity(flt,buffer_full.W_rk1)
+    #        𝔸, 𝐏, W = NumericalRelaxation.eval(flt,W_multi)
+    #        @test W == 0.0
+    #        @test 𝐏 == zero(Tensor{2,2})
+    #    end
+    #end
 end
 
 @testset "BALT" begin

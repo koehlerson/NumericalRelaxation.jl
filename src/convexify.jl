@@ -1020,7 +1020,7 @@ function build_buffer(r1convexification::R1Convexification{dimp,dimc,dirtype,T})
     gradientgrid = r1convexification.grid
     _δ = δ(gradientgrid)
     _r = radius(gradientgrid)
-    max_gx = ceil(Int,((2*_r))/_δ^3) + dimp^2 + 100
+    max_gx = ceil(Int,((2*_r))/_δ^3) + dimp^2 + 10000
     buffer = [R1ConvexificationThreadBuffer(dimp,max_gx) for i in 1:Threads.nthreads()]
     W_rk1 = linear_interpolation(getaxes(gradientgrid),zeros(size(gradientgrid)),extrapolation_bc=Interpolations.Flat())
     W_rk1_old = deepcopy(W_rk1)
@@ -1038,6 +1038,7 @@ The approximated rank-one convex envelope is saved in `r1buffer.W_rk1`
 """
 function convexify!(r1convexification::R1Convexification,r1buffer::R1ConvexificationBuffer,W::FUN,xargs::Vararg{Any,XN};buildtree=false,maxk=20) where {FUN,XN}
     gradientgrid = r1convexification.grid
+    _center = center(gradientgrid)
     directions = r1convexification.dirs
     W_rk1 = r1buffer.W_rk1
     W_rk1.itp.itp.coefs .= [try (isnan(W(F,xargs...)) ? 1000.0 : W(F,xargs...)) catch DomainError 1000.0 end for F in gradientgrid]
@@ -1062,8 +1063,8 @@ function convexify!(r1convexification::R1Convexification,r1buffer::R1Convexifica
             X = threadbuffer[id].X; g = threadbuffer[id].g; h = threadbuffer[id].h; y = threadbuffer[id].y;
             buildtree && (partiallaminatetree = threadbuffer[id].partiallaminatetree)
             for 𝐀 in directions
-                if true # TODO ersetzen mit inbounds_𝐚(gradientgrid,𝐚) && inbounds_𝐛(gradientgrid,𝐛) aber für 𝐀
-                    𝐀 = _δ^3 * (𝐀) # ^3 sollte für jede Dimension richtig sein
+                𝐀 = _δ^3 * (𝐀) # ^3 sollte für jede Dimension richtig sein
+                if inbounds(_center + 𝐀, gradientgrid) || inbounds(_center - 𝐀, gradientgrid)
                     if norm(𝐀,Inf) > 0
                         ctr_fw = 0
                         ctr_bw = 0
@@ -1075,9 +1076,9 @@ function convexify!(r1convexification::R1Convexification,r1buffer::R1Convexifica
                                 𝐱 = 𝐅 # init dir
                                 ell = 0 # start bei 0
                             end
-                            𝐱_svd = diagm(Tensor{2,2},svd(𝐱).S)
-                            while inbounds(𝐱_svd,gradientgrid) && all(x->x ≥ 0,𝐱_svd)
-                                val = W_rk1_old(𝐱_svd[1,1],𝐱_svd[2,2])
+                            𝐱_filter = filter(𝐱, gradientgrid)
+                            while checkfilterbounds(𝐱_filter,gradientgrid)
+                                val = evaluate(gradientgrid, W_rk1_old, 𝐱_filter)
                                 if dir == 1
                                     g_fw[ctr_fw+1] = val
                                     X_fw[ctr_fw+1] = ell
@@ -1088,7 +1089,7 @@ function convexify!(r1convexification::R1Convexification,r1buffer::R1Convexifica
                                     ctr_bw += 1
                                 end
                                 𝐱 += dir*𝐀
-                                𝐱_svd = diagm(Tensor{2,2},svd(𝐱).S)
+                                𝐱_filter = filter(𝐱, gradientgrid)
                                 ell += dir
                             end
                         end
@@ -1103,8 +1104,10 @@ function convexify!(r1convexification::R1Convexification,r1buffer::R1Convexifica
                                     l₂ = y[j]
                                     F¯ = 𝐅 + l₁*𝐀
                                     F⁺ = 𝐅 + l₂*𝐀
-                                    W¯ = W_rk1_old(F¯[1,1],F¯[2,2])
-                                    W⁺ = W_rk1_old(F⁺[1,1],F⁺[2,2])
+                                    F¯ = filter(F¯, gradientgrid)
+                                    F⁺ = filter(F⁺, gradientgrid)
+                                    W¯ = evaluate(gradientgrid,W_rk1_old,F¯)
+                                    W⁺ = evaluate(gradientgrid,W_rk1_old,F⁺)
                                     laminate = Laminate(F¯,F⁺,W¯,W⁺,𝐀,k)
                                     if haskey(partiallaminatetree,lin_ind_𝐅) # check if thread laminate tree has key 𝐅
                                         if isassigned(partiallaminatetree[lin_ind_𝐅],k) # check if thread laminate tree has already k-level laminates
@@ -1129,6 +1132,30 @@ function convexify!(r1convexification::R1Convexification,r1buffer::R1Convexifica
     end
     buildtree && merge!(laminatetree,getproperty.(r1buffer.threadbuffer,:partiallaminatetree)...)
     nothing
+end
+
+function evaluate(gradientgrid,W_rk1_old,𝐱_filtered)
+    return W_rk1_old(𝐱_filtered...)
+end
+
+function evaluate(gradientgrid::SingularValueGrid{dim},W_rk1_old,𝐱_filtered) where dim
+    return W_rk1_old(ntuple(i->𝐱_filtered[i,i],dim)...)
+end
+
+function filter(𝐱,gradientgrid)
+    return 𝐱
+end
+
+function filter(𝐱, gradientgrid::SingularValueGrid)
+    return diagm(Tensor{2,2},svd(𝐱).S)
+end
+
+function checkfilterbounds(𝐱_filter,gradientgrid)
+    return inbounds(𝐱_filter,gradientgrid)
+end
+
+function checkfilterbounds(𝐱_filter,gradientgrid::SingularValueGrid)
+    return inbounds(𝐱_filter,gradientgrid) && all(x->x ≥ 0, 𝐱_filter)
 end
 
 @doc raw"""
