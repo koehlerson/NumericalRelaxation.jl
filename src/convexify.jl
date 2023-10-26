@@ -1134,6 +1134,14 @@ function convexify!(r1convexification::R1Convexification,r1buffer::R1Convexifica
     nothing
 end
 
+function ssvd(x)
+    _svd = svd(x)
+    S = _svd.S
+    _det = det(x)
+    S[1] *= _det == 0 ? 1.0 : sign(_det)
+    return S
+end
+
 function evaluate(gradientgrid,W_rk1_old,𝐱_filtered)
     return W_rk1_old(𝐱_filtered...)
 end
@@ -1147,7 +1155,7 @@ function filter(𝐱,gradientgrid)
 end
 
 function filter(𝐱, gradientgrid::SingularValueGrid)
-    return diagm(Tensor{2,2},svd(𝐱).S)
+    return diagm(Tensor{2,2},ssvd(𝐱))
 end
 
 function checkfilterbounds(𝐱_filter,gradientgrid)
@@ -1155,7 +1163,7 @@ function checkfilterbounds(𝐱_filter,gradientgrid)
 end
 
 function checkfilterbounds(𝐱_filter,gradientgrid::SingularValueGrid)
-    return inbounds(𝐱_filter,gradientgrid) && all(x->x ≥ 0, 𝐱_filter)
+    return inbounds(𝐱_filter,gradientgrid)
 end
 
 @doc raw"""
