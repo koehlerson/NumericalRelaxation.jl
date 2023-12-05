@@ -1281,7 +1281,7 @@ function baltkernel(root::BinaryAdaptiveLaminationTree, convexification::BALTCon
                     𝐱 = F # init dir
                     ell = 0 # start at 0
                 end
-                while inbounds(𝐱,convexification) && (convexification.GLcheck ? det(𝐱) > 1e-8 : true)
+                while inbounds(𝐱,convexification) && (convexification.GLcheck ? det(𝐱) > 1e-6 : true)
                     val = W(𝐱,xargs...)
                     if dir == 1
                         buffer.forward_initial.values[ctr_fw+1] = val
@@ -1335,7 +1335,7 @@ function laminatekernel(𝐀::Tensor{2,dim,T,N},convexification::BALTConvexifica
             𝐱 = F # init dir
             ell = 0 # start at 0
         end
-        while inbounds(𝐱,convexification) && (convexification.GLcheck ? det(𝐱) > 1e-10 : true)
+        while inbounds(𝐱,convexification) && (convexification.GLcheck ? det(𝐱) > 1e-6 : true)
             val = W(𝐱,xargs...)
             if dir == 1
                 buffer.forward_initial.values[ctr_fw+1] = val
@@ -1486,6 +1486,23 @@ function rotationaverage(bt::BinaryAdaptiveLaminationTree{2},W::FUN,xargs::Varar
             counter += 1
         end
         rotate!(bt_rotate,-α) #rotate back
+    end
+    return 𝔸/counter, 𝐏/counter, W_ref/counter
+end
+
+function rotationaverage(bt::BinaryAdaptiveLaminationTree{3},W::FUN,xargs::Vararg{Any,N}) where {FUN,N}
+    𝔸, 𝐏, W_ref = eval(bt, W, xargs...)
+    bt_rotate = rotate(bt,0,0,0)
+    angles = pi/10:pi/10:pi
+    counter = 1
+    for α ∈ angles, β ∈ angles, γ ∈ angles
+        rotate!(bt_rotate,α,β,γ)
+        𝔸_r, 𝐏_r, W_r = eval(bt_rotate, W, xargs...)
+        if isapprox(W_r,W_ref)
+            𝔸 += 𝔸_r; 𝐏 += 𝐏_r; W_ref += W_r
+            counter += 1
+        end
+        rotate!(bt_rotate,-α,-β,-γ) #rotate back
     end
     return 𝔸/counter, 𝐏/counter, W_ref/counter
 end
