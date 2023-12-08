@@ -1,9 +1,12 @@
 module NumericalRelaxation
 
 using Tensors
+using StaticArrays
+using SparseArrays
 using AbstractTrees
 using Interpolations
 using LinearAlgebra
+using JuMP, HiGHS
 
 abstract type AbstractConvexification end
 abstract type AbstractConvexificationBuffer end
