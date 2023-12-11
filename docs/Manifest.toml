@@ -299,9 +299,7 @@ version = "1.2.0"
 
 [[deps.NumericalRelaxation]]
 deps = ["AbstractTrees", "HiGHS", "Interpolations", "JuMP", "LinearAlgebra", "SparseArrays", "StaticArrays", "Tensors"]
-git-tree-sha1 = "cff3cc8638f1d7b3d4f2cc333628c532ceb7e973"
-repo-rev = "svpoly"
-repo-url = ".."
+path = ".."
 uuid = "82303a6c-a702-44d7-938a-15dad61d8a03"
 version = "1.0.3"
 
