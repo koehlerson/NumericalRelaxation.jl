@@ -15,8 +15,11 @@ Tensors = "48a634ad-e948-5137-8d70-aa71f2a747f4"
 
 [compat]
 AbstractTrees = "0.4"
+HiGHS = "1"
 Interpolations = "0.14"
+JuMP = "1"
 Tensors = "1"
+StaticArrays = "1"
 julia = "1.7"
 
 [extras]
