@@ -1,4 +1,5 @@
 using NumericalRelaxation
+using StaticArrays
 using Tensors
 using Test
 
@@ -177,6 +178,66 @@ end
         @test @inferred(convexify(ac,buffer,W,Tensor{2,1}((2.0,)))) == (W_conv,F⁺,F⁻)
     end
 end
+
+@testset "PolyConvexification" begin
+    function W(F::Union{Matrix{Float64},SMatrix{d,d,Float64},Tensor{2,d,Float64}}) where d
+        return (norm(F) <= (sqrt(2) - 1)) ? (2 * sqrt(2) * norm(F)) : (1 + norm(F)^2)
+    end
+
+    function DW(F::Union{Matrix{Float64},SMatrix{d,d,Float64},Tensor{2,d,Float64}}) where d
+        return (norm(F) <= (sqrt(2) - 1)) ? (2 * sqrt(2) * (norm(F)^(-1)) * F) : 2 .* F
+    end
+
+    function Wpc(F::Union{Matrix{Float64},SMatrix{d,d,Float64},Tensor{2,d,Float64}}) where d
+        rho = sqrt(norm(F)^2 + 2 * abs(det(F)))
+        return (rho <= 1) ? (2 * (rho - abs(det(F)))) : (1 + norm(F)^2)
+    end
+
+    function DWpc(F::Union{Matrix{Float64},SMatrix{d,d,Float64},Tensor{2,d,Float64}}) where d
+        rho = sqrt(norm(F)^2 + 2 * abs(det(F)))
+        Drho = (1 / 2) * (norm(F)^2 + 2 * abs(det(F)))^(-1 / 2) * (2 * F + 2 * sign(det(F)) * inv(F)' * det(F))
+        return (rho <= 1) ? (2 * (Drho - sign(det(F)) * inv(F)' * det(F))) : 2 .* F
+    end
+
+    function Φ(ν)
+        return W(diagm(ν))
+    end
+
+    function Φpc(ν)
+        return Wpc(diagm(ν))
+    end
+
+
+    # ##############################################################
+    # small convergence test for the polyconvexification approach
+    # ##############################################################
+    d = 2
+    F = (rand(2,2).-0.5) * 2
+    ν = ssv(F)
+    r = 2
+    nrefs = collect(1:10)
+    errors = zeros(size(nrefs))
+    errorsIso = zeros(size(nrefs))
+    errorsDerivative = zeros(size(nrefs))
+    errorsDerivativeIso = zeros(size(nrefs))
+    for (i, nref) in enumerate(nrefs)
+        print("Started SVPC convexify, nref = ", nref)
+        poly_convexification = PolyConvexification(d, 3.; nref=nref)
+        poly_buffer = build_buffer(poly_convexification)
+
+        Φpcνδ, DΦpcνδ, _ = convexify(poly_convexification, poly_buffer, Φ, ν; returnDerivs=true)
+        WpcFδ, DWpcFδ, _ = convexify(poly_convexification, poly_buffer, W, F; returnDerivs=true)
+        errors[i] = WpcFδ - Wpc(F)
+        errorsDerivative[i] = norm(DWpcFδ - DWpc(F))
+
+        errorsIso[i] = Φpcνδ - Wpc(F)
+        DWpcFδ = Tensor{3,d}(Dssv(F)) ⋅ Vec{d}(DΦpcνδ)
+        errorsDerivativeIso[i] = norm(DWpcFδ - DWpc(F))
+    end
+    Δ = (2. * r) ./ (2.0 .^ (nrefs))
+    @test all(isapprox.(errors[4:end],(0.0,),atol=1e-1))
+end
+
 #    @testset "adaptive_1Dgrid!()" begin
 #        for material in materialvec
 #            buf = ConvexDamage.build_buffer(material.convexstrategy)
