@@ -5,7 +5,6 @@ using Test
 
 W(F::Number,x1=2,x2=6) = (F-1)^x1 * (42 + 77*F + 15*F^x1 - 102.5*F^3 + 58.89*F^4 - 12.89*F^5 + F^x2)
 W(F::Tensor{2,1},x1=2,x2=6) = W(F[1],x1,x2)
-
 W_multi(F::Tensor{2,dim}) where dim = (norm(F)-1)^2
 W_multi_rc(F::Tensor{2,dim}) where dim = norm(F) ≤ 1 ? 0.0 : (norm(F)-1)^2
 

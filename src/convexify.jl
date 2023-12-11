@@ -1134,7 +1134,15 @@ function convexify!(r1convexification::R1Convexification,r1buffer::R1Convexifica
     nothing
 end
 
-function ssvd(x)
+function ssvd(x::Tensor{2,2})
+    _svd = svd(x)
+    S = _svd.S
+    _det = det(x)
+    S[1] *= _det == 0 ? 1.0 : sign(_det)
+    return S
+end
+
+function ssvd(x::Tensor{2,3})
     _svd = svd(x)
     S = _svd.S
     _det = det(x)
