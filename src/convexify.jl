@@ -1131,7 +1131,7 @@ function convexify(poly_convexification::PolyConvexification, poly_buffer::PolyC
         display("dimension missmatch")
     end
 
-    poly_buffer.Φν_δ[1:end] = Φ.(ν_δ)
+    poly_buffer.Φν_δ[1:end] = Φ.(ν_δ, xargs...)
     poly_buffer.Φactive[1:end] = poly_buffer.Φν_δ .< Inf
 
     # delete points from the grid where Φ attends infinity (by the active bool vector)
