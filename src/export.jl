@@ -4,11 +4,14 @@ export
     AdaptiveGrahamScan,
     R1Convexification,
     BALTConvexification,
+    BinaryAdaptiveLaminationTree,
+    PolyConvexification,
 #convexification buffers
     ConvexificationBuffer1D,
     AdaptiveConvexificationBuffer1D,
     R1ConvexificationBuffer,
     BALTBuffer,
+    PolyConvexificationBuffer,
     build_buffer,
 #convexification functions
     convexify,
@@ -20,4 +23,9 @@ export
     ParametrizedDDirections,
     ℛ¹Direction,
     ℛ¹DirectionBuffered,
-    FlexibleLaminateTree
+    FlexibleLaminateTree,
+#singular values and minors
+    minors,
+    Dminors,
+    ssv,
+    Dssv
