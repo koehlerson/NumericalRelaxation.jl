@@ -1,4 +1,4 @@
-# Multi-Dimensional Convexification
+# Multi-Dimensional Rank-one Convexification
 
 ## API
 
