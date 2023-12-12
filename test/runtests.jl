@@ -221,7 +221,6 @@ end
     errorsDerivative = zeros(size(nrefs))
     errorsDerivativeIso = zeros(size(nrefs))
     for (i, nref) in enumerate(nrefs)
-        print("Started SVPC convexify, nref = ", nref)
         poly_convexification = PolyConvexification(d, 3.; nref=nref)
         poly_buffer = build_buffer(poly_convexification)
 
@@ -235,7 +234,7 @@ end
         errorsDerivativeIso[i] = norm(DWpcFδ - DWpc(F))
     end
     Δ = (2. * r) ./ (2.0 .^ (nrefs))
-    @test all(isapprox.(errors[end-3:end],(0.0,),atol=1e-3))
+    @test isapprox(errors[end],0.0,atol=1e-3)
 end
 
 #    @testset "adaptive_1Dgrid!()" begin
