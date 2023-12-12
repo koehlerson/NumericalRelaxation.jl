@@ -146,10 +146,6 @@ function concat!(conc_list, a_fw, s_fw, a_bw, s_bw)
     return conc_list
 end
 
-
-
-
-
 ####################################################
 ####################################################
 ############ Signed singular values  ###############
@@ -159,51 +155,24 @@ end
 @doc raw"""
 singular values computed by the eigenvalues of the right cauchy green tensor
 """
-function sv(F::Matrix{Float64})
+function sv(F)
     return sqrt.(eigvals(F' * F))
 end
-
-function sv(F::SMatrix{d,d,Float64}) where {d}
-    return sqrt.(eigvals(F' * F))
-end
-
-function sv(F::Tensor{2,d,Float64}) where {d}
-    return sqrt.(eigvals(F' ⋅ F))
-end
-
 
 @doc raw"""
 signed singular values
 """
-function ssv(F::Matrix{Float64})
+function ssv(F)
     return sqrt.(eigvals(F' * F)) .* [sign(det(F)), ones(size(F)[1] - 1)...]
 end
-
-function ssv(F::SMatrix{d,d,Float64}) where {d}
-    return SVector{d}(sqrt.(eigvals(F' * F)) .* [sign(det(F)), ones(d - 1)...])
-end
-
-function ssv(F::Tensor{2,d,Float64}) where {d}
-    return SVector{d}(sqrt.(eigvals(F' ⋅ F)) .* [sign(det(F)), ones(d - 1)...])
-end
-
 
 @doc raw"""
 Derivative of signed singular values mapping, calculated by forward difference quotients.
 TODO: might need improvement
 """
-function Dssv(F::Matrix{Float64}; eps=1e-8)
+function Dssv(F; eps=1e-8)
     return Tensor{3,size(F)[1]}((i, j, k) -> (ssv(F + sparse([i], [j], [eps], size(F)...)) - ssv(F))[k] / eps)
 end
-
-function Dssv(F::SMatrix{d,d,Float64}; eps=1e-8) where {d}
-    return Tensor{3,d}((i, j, k) -> (ssv(F + sparse([i], [j], [eps], d, d)) - ssv(F))[k] / eps)
-end
-
-function Dssv(F::Tensor{2,d,Float64}; eps=1e-8) where {d}
-    return Tensor{3,d}((i, j, k) -> (ssv(F + sparse([i], [j], [eps], d, d)) - ssv(F))[k] / eps)
-end
-
 
 ####################################################
 ####################################################
@@ -221,15 +190,7 @@ function minors(A::Matrix{Float64})
     end
 end
 
-function minors(A::SMatrix{d,d,Float64}) where {d}
-    if d == 2
-        return SVector{5}([A..., det(A)])
-    elseif d == 3
-        return SVector{19}([A..., det(A) * inv(A)..., det(A)])
-    end
-end
-
-function minors(A::Tensor{2,d,Float64}) where {d}
+function minors(A::Union{Tensor{2,d,Float64},SMatrix{d,d,Float64}}) where {d}
     if d == 2
         return SVector{5}([A..., det(A)])
     elseif d == 3
