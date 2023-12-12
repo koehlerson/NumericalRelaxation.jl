@@ -1050,3 +1050,135 @@ function convexify!(f, x, ctr, h, y)
     g_ss = h[j-1] + λ * -y[j-1]
     return g_ss, j
 end
+
+
+####################################################
+####################################################
+##############  Polyconvexification  ###############
+####################################################
+####################################################
+
+@doc raw"""
+    PolyConvexification{} <: AbstractConvexification
+
+Datastructure which holds basic parameters and grid for the Polyconvexification
+
+- `dimp::Int` dimension of the physical problem
+- `dimc::Int` lifted dimension, 2D -> 3, 3D -> 7, in this dimension the convexificaiton problem for the polyconvexification is stated 
+- `r::Float64` discretization radius
+- `nref::Int` number of uniform grid refinements
+- `grid::Vector{T1}` grid of the signed singula values
+- `liftedGrid::Vector{T1}` lifted grid of signed singular values through application of the minors function
+"""
+struct PolyConvexification{T1,T2} <: AbstractConvexification
+    dimp::Int
+    dimc::Int
+    r::Float64
+    nref::Int
+    grid::Vector{T1}
+    liftedGrid::Vector{T2}
+end
+
+
+function PolyConvexification(dimp::Int, r::Float64; nref::Int=9, δ::Float64=0.0)
+    if δ <= 0.0
+        δ = 2 * r / 2 .^ nref
+    end
+    if dimp == 2
+        p = Iterators.product(-r:δ:r, -r:δ:r)
+    elseif dimp == 3
+        p = Iterators.product(-r:δ:r, -r:δ:r, -r:δ:r)
+    end
+    grid = vec(collect.(p))
+    liftedGrid = minors.(grid)
+    return PolyConvexification(dimp, length(minors(ones(dimp))), r, nref, grid, liftedGrid)
+end
+
+
+@doc raw"""
+- `Φν_δ::Vector{T1}` holds the values of `Φ` evaluated at the grid `ν_δ`
+- `Φactive::Vector{Bool}` marks the grid points involved in the minimization problem
+"""
+struct PolyConvexificationBuffer{T} <: AbstractConvexificationBuffer
+    Φν_δ::Vector{T}
+    Φactive::Vector{Bool}
+end
+
+function build_buffer(poly_convexification::PolyConvexification)
+    nrpoints = length(poly_convexification.grid)
+    return PolyConvexificationBuffer(zeros(nrpoints), fill!(Vector{Bool}(undef, nrpoints), false))
+end
+
+
+@doc raw"""
+Signed singular value polyconvexification using the linear programming approach.
+Compute approximation to the singular value polycovex envelope of the function `Φ` which is the reformulation of the isotropic function `W`
+in terms of signed singular values $Φ(ν) = W(diagm(ν))$, at the point `ν` via the linear programming approach as discussed in 
+    [^1] Timo Neumeier, Malte A. Peter, Daniel Peterseim, David Wiedemann.
+    Computational polyconvexification of isotropic functions, arXiv 2307.15676, 2023.
+The parameters `nref` and `r` (stored in poly_convexification struct) discribe the grid by radius `r` (in the ∞ norm) and `nref` uniform mesh refinements.
+The points of the lifted grid which are involved in the minimization are marked by the Φactive buffer, and deliver `Φ` values smaller than infinity.
+
+`Φ::FUN` function in terms of signed singular values `Φ(ν) = W(diagm(ν))`
+`ν::Vector{Float64}` point of evaluation for the polyconvex hull
+`returnDerivs::Bool` return first order derivative information
+"""
+function convexify(poly_convexification::PolyConvexification, poly_buffer::PolyConvexificationBuffer, Φ::FUN, ν::Union{Vec{d},Vector{Float64}}, xargs::Vararg{Any,XN}; returnDerivs::Bool=true) where {FUN,XN,d}
+    ν_δ = poly_convexification.grid
+    mν_δ = poly_convexification.liftedGrid
+
+    if length(ν) != poly_convexification.dimp
+        display("dimension missmatch")
+    end
+
+    poly_buffer.Φν_δ[1:end] = Φ.(ν_δ, xargs...)
+    poly_buffer.Φactive[1:end] = poly_buffer.Φν_δ .< Inf
+
+    # delete points from the grid where Φ attends infinity (by the active bool vector)
+    mν_δ, Φν_δ = mν_δ[poly_buffer.Φactive], poly_buffer.Φν_δ[poly_buffer.Φactive]
+    nΦν_δ = count(!=(0), poly_buffer.Φactive)
+
+    # set up optimization model
+    model = Model(HiGHS.Optimizer)
+    set_attribute(model, "presolve", "on")
+    set_attribute(model, "time_limit", 60.0)
+    set_silent(model) # set output silent
+    # solution variable
+    @variable(model, 1 >= x[1:nΦν_δ] >= 0)
+    @objective(model, Min, x' * Φν_δ)
+    # constraints
+    A = stack([ones(nΦν_δ)'; hcat(mν_δ...)])
+    b = stack([1; minors(ν)])
+    con = @constraint(model, A * x .== b)
+    optimize!(model)
+
+    if returnDerivs
+        # first order derivative information
+        # DΦpc(ν) = Dminors(ν) * λ (Lagrange Multiplier associated to the optimization problem)
+        return objective_value(model), Dminors(ν) * dual.(con)[2:end], zero(Tensor{3, poly_convexification.dimp})
+    else
+        return objective_value(model)
+    end
+end
+
+
+@doc raw"""
+Signed singular value polyconvexification using the linear programming approach
+
+takes dxd matrix `F` and function `W`$: \mathbb{R}^{d \times d} \to \mathbb{R}$  (isotropic)
+"""
+function convexify(poly_convexification::PolyConvexification, poly_buffer::PolyConvexificationBuffer, W::FUN, F::Union{Matrix{T},SMatrix{dim,dim,T},Tensor{2,dim,T}}, xargs::Vararg{Any,XN}; returnDerivs::Bool=true) where {FUN,XN,dim,T}
+    d = poly_convexification.dimp
+    ν = ssv(F)
+    Φ = (x,xargs...) -> W(diagm(x), xargs...)  # TODO: optimize xargs treatment
+    if returnDerivs
+        Φpcνδ, DΦpcνδ, _ = convexify(poly_convexification, poly_buffer, Φ, ν::Vector{Float64}, xargs...; returnDerivs)
+        WpcFδ = Φpcνδ
+        DWpcFδ = Tensor{3,d}(Dssv(F)) ⋅ Vec{d}(DΦpcνδ)
+        return WpcFδ, DWpcFδ, zero(Tensor{4, d})
+    else
+        Φpcνδ = convexify(poly_convexification, poly_buffer, Φ, ν::Vector{Float64}, xargs...; returnDerivs)
+        WpcFδ = Φpcνδ
+        return WpcFδ
+    end
+end

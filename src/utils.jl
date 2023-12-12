@@ -145,3 +145,97 @@ function concat!(conc_list, a_fw, s_fw, a_bw, s_bw)
     end
     return conc_list
 end
+
+####################################################
+####################################################
+############ Signed singular values  ###############
+####################################################
+####################################################
+
+@doc raw"""
+singular values computed by the eigenvalues of the right cauchy green tensor
+"""
+function sv(F)
+    return sqrt.(eigvals(F' * F))
+end
+
+@doc raw"""
+signed singular values
+"""
+function ssv(F)
+    return sqrt.(eigvals(F' * F)) .* [sign(det(F)), ones(size(F)[1] - 1)...]
+end
+
+@doc raw"""
+Derivative of signed singular values mapping, calculated by forward difference quotients.
+TODO: might need improvement
+"""
+function Dssv(F; eps=1e-8)
+    return Tensor{3,size(F)[1]}((i, j, k) -> (ssv(F + sparse([i], [j], [eps], size(F)...)) - ssv(F))[k] / eps)
+end
+
+####################################################
+####################################################
+#################### Minors  #######################
+####################################################
+####################################################
+@doc raw"""
+minors for matrices and vectors
+"""
+function minors(A::Matrix{Float64})
+    if size(A)[1] == 2
+        return [A..., det(A)]
+    elseif size(A)[1] == 3
+        return [A..., det(A) * inv(A)..., det(A)]
+    end
+end
+
+function minors(A::Union{Tensor{2,d,Float64},SMatrix{d,d,Float64}}) where {d}
+    if d == 2
+        return SVector{5}([A..., det(A)])
+    elseif d == 3
+        return SVector{19}([A..., det(A) * inv(A)..., det(A)])
+    end
+end
+
+function minors(ν::Vector{Float64})
+    if length(ν) == 2
+        return [ν[1], ν[2], ν[1]*ν[2]]
+    elseif length(ν) == 3
+        return [ν[1], ν[2], ν[3], ν[2]*ν[3], ν[1]*ν[3], ν[1]*ν[2], ν[1]*ν[2]*ν[3]]
+    end
+end
+
+function minors(ν::Union{Vec{d,T},SVector{d, T}}) where {d,T}
+    if d == 2
+        return SVector{3}([ν[1], ν[2], ν[1]*ν[2]])
+    elseif d == 3
+        return SVector{7}([ν[1], ν[2], ν[3], ν[2]*ν[3], ν[1]*ν[3], ν[1]*ν[2], ν[1]*ν[2]*ν[3]])
+    end
+end
+
+
+@doc raw"""
+Derivative of the minors function
+    Dminors$:\mathbb{R}^{d} \to \mathbb{R}^{d \times k_d}$
+with $k_d$ denoting the lifted dimension
+"""
+function Dminors(ν::Vector{Float64})
+    if length(ν) == 2
+        return [1 0 ν[2]; 0 1 ν[1]]
+    elseif length(ν) == 3
+        return [1 0 0 0    ν[3] ν[2] ν[2]*ν[3];
+                0 1 0 ν[3] 0    ν[1] ν[1]*ν[3];
+                0 0 1 ν[2] ν[1] 0    ν[1]*ν[2]]
+    end
+end
+
+function Dminors(ν::Union{Vec{d,T},SVector{d, T}}) where {d,T}
+    if d == 2
+        return SMatrix{2, 3}([1 0 ν[2]; 0 1 ν[1]])
+    elseif d == 3
+        return SMatrix{3, 7}([1 0 0 0    ν[3] ν[2] ν[2]*ν[3];
+                              0 1 0 ν[3] 0    ν[1] ν[1]*ν[3];
+                              0 0 1 ν[2] ν[1] 0    ν[1]*ν[2]])
+    end
+end
