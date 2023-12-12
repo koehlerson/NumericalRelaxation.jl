@@ -159,11 +159,19 @@ function sv(F)
     return sqrt.(eigvals(F' * F))
 end
 
+function sv(F::Tensor{2,d,Float64}) where {d}
+    return sqrt.(eigvals(F' ⋅ F))
+end
+
 @doc raw"""
 signed singular values
 """
 function ssv(F)
     return sqrt.(eigvals(F' * F)) .* [sign(det(F)), ones(size(F)[1] - 1)...]
+end
+
+function ssv(F::Tensor{2,d,Float64}) where {d}
+    return SVector{d}(sqrt.(eigvals(F' ⋅ F)) .* [sign(det(F)), ones(d - 1)...])
 end
 
 @doc raw"""

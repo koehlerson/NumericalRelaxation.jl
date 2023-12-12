@@ -1123,7 +1123,7 @@ The points of the lifted grid which are involved in the minimization are marked 
 `ν::Vector{Float64}` point of evaluation for the polyconvex hull
 `returnDerivs::Bool` return first order derivative information
 """
-function convexify(poly_convexification::PolyConvexification, poly_buffer::PolyConvexificationBuffer, Φ::FUN, ν::Union{Vec{d},Vector{Float64}}, xargs::Vararg{Any,XN}; returnDerivs::Bool=true) where {FUN,XN,d}
+function convexify(poly_convexification::PolyConvexification, poly_buffer::PolyConvexificationBuffer, Φ::FUN, ν::Union{Vec{d,T},Vector{T},SVector{d,T}}, xargs::Vararg{Any,XN}; returnDerivs::Bool=true) where {FUN,XN,d,T}
     ν_δ = poly_convexification.grid
     mν_δ = poly_convexification.liftedGrid
 
@@ -1131,7 +1131,7 @@ function convexify(poly_convexification::PolyConvexification, poly_buffer::PolyC
         display("dimension missmatch")
     end
 
-    poly_buffer.Φν_δ[1:end] = Φ.(ν_δ, xargs...)
+    poly_buffer.Φν_δ[1:end] .= [Φ(x, xargs...) for x in ν_δ]
     poly_buffer.Φactive[1:end] = poly_buffer.Φν_δ .< Inf
 
     # delete points from the grid where Φ attends infinity (by the active bool vector)
@@ -1170,9 +1170,9 @@ takes dxd matrix `F` and function `W`$: \mathbb{R}^{d \times d} \to \mathbb{R}$ 
 function convexify(poly_convexification::PolyConvexification, poly_buffer::PolyConvexificationBuffer, W::FUN, F::Union{Matrix{T},SMatrix{dim,dim,T},Tensor{2,dim,T}}, xargs::Vararg{Any,XN}; returnDerivs::Bool=true) where {FUN,XN,dim,T}
     d = poly_convexification.dimp
     ν = ssv(F)
-    Φ = (x,xargs...) -> W(diagm(x), xargs...)  # TODO: optimize xargs treatment
+    Φ = (x,xargs...) -> W(diagm(Tensor{2,d},x), xargs...)  # TODO: optimize xargs treatment
     if returnDerivs
-        Φpcνδ, DΦpcνδ, _ = convexify(poly_convexification, poly_buffer, Φ, ν::Vector{Float64}, xargs...; returnDerivs)
+        Φpcνδ, DΦpcνδ, _ = convexify(poly_convexification, poly_buffer, Φ, ν, xargs...; returnDerivs)
         WpcFδ = Φpcνδ
         DWpcFδ = Tensor{3,d}(Dssv(F)) ⋅ Vec{d}(DΦpcνδ)
         return WpcFδ, DWpcFδ, zero(Tensor{4, d})
