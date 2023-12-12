@@ -1123,7 +1123,7 @@ The points of the lifted grid which are involved in the minimization are marked 
 `ν::Vector{Float64}` point of evaluation for the polyconvex hull
 `returnDerivs::Bool` return first order derivative information
 """
-function convexify(poly_convexification::PolyConvexification, poly_buffer::PolyConvexificationBuffer, Φ::FUN, ν::Vector{Float64}, xargs::Vararg{Any,XN}; returnDerivs::Bool=true) where {FUN,XN}
+function convexify(poly_convexification::PolyConvexification, poly_buffer::PolyConvexificationBuffer, Φ::FUN, ν::Union{Vec{d},Vector{Float64}}, xargs::Vararg{Any,XN}; returnDerivs::Bool=true) where {FUN,XN,d}
     ν_δ = poly_convexification.grid
     mν_δ = poly_convexification.liftedGrid
 
@@ -1167,10 +1167,10 @@ Signed singular value polyconvexification using the linear programming approach
 
 takes dxd matrix `F` and function `W`$: \mathbb{R}^{d \times d} \to \mathbb{R}$  (isotropic)
 """
-function convexify(poly_convexification::PolyConvexification, poly_buffer::PolyConvexificationBuffer, W::FUN, F::Matrix{Float64}, xargs::Vararg{Any,XN}; returnDerivs::Bool=true) where {FUN,XN}
+function convexify(poly_convexification::PolyConvexification, poly_buffer::PolyConvexificationBuffer, W::FUN, F::Union{Matrix{T},SMatrix{dim,dim,T},Tensor{2,dim,T}}, xargs::Vararg{Any,XN}; returnDerivs::Bool=true) where {FUN,XN,dim,T}
     d = poly_convexification.dimp
     ν = ssv(F)
-    Φ = x -> W(diagm(x), xargs...)  # TODO: optimize xargs treatment
+    Φ = (x,xargs...) -> W(diagm(x), xargs...)  # TODO: optimize xargs treatment
     if returnDerivs
         Φpcνδ, DΦpcνδ, _ = convexify(poly_convexification, poly_buffer, Φ, ν::Vector{Float64}, xargs...; returnDerivs)
         WpcFδ = Φpcνδ
