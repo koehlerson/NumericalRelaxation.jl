@@ -206,7 +206,7 @@ function minors(ν::Vector{Float64})
     end
 end
 
-function minors(ν::SVector{d, Float64}) where {d}
+function minors(ν::Union{Vec{d,T},SVector{d, T}}) where {d,T}
     if d == 2
         return SVector{3}([ν[1], ν[2], ν[1]*ν[2]])
     elseif d == 3
@@ -230,7 +230,7 @@ function Dminors(ν::Vector{Float64})
     end
 end
 
-function Dminors(ν::SVector{d, Float64}) where {d}
+function Dminors(ν::Union{Vec{d,T},SVector{d, T}}) where {d,T}
     if d == 2
         return SMatrix{2, 3}([1 0 ν[2]; 0 1 ν[1]])
     elseif d == 3

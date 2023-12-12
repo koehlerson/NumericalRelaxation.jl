@@ -1086,7 +1086,7 @@ function PolyConvexification(dimp::Int, r::Float64; nref::Int=9, δ::Float64=0.0
     end
     if dimp == 2
         p = Iterators.product(-r:δ:r, -r:δ:r)
-    elseif d == 3
+    elseif dimp == 3
         p = Iterators.product(-r:δ:r, -r:δ:r, -r:δ:r)
     end
     grid = vec(collect.(p))
