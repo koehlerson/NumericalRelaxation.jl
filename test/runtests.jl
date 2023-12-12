@@ -11,7 +11,7 @@ W_multi_rc(F::Tensor{2,dim}) where dim = norm(F) ≤ 1 ? 0.0 : (norm(F)-1)^2
 
 @testset "Equidistant Graham Scan" begin
     convexification = GrahamScan(start=0.01,stop=5.0,δ=0.01)
-    buffer = build_buffer(convexification) 
+    buffer = build_buffer(convexification)
     W_conv, F⁺, F⁻ = convexify(convexification,buffer,W,Tensor{2,1}((2.0,)))
     @test isapprox(W_conv,7.2,atol=1e-1)
     @test isapprox(F⁺[1],4.0,atol=1e-1)
@@ -235,7 +235,7 @@ end
         errorsDerivativeIso[i] = norm(DWpcFδ - DWpc(F))
     end
     Δ = (2. * r) ./ (2.0 .^ (nrefs))
-    @test all(isapprox.(errors[4:end],(0.0,),atol=1e-1))
+    @test all(isapprox.(errors[end-3:end],(0.0,),atol=1e-3))
 end
 
 #    @testset "adaptive_1Dgrid!()" begin
