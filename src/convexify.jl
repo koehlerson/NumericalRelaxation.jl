@@ -1081,6 +1081,24 @@ function convexify!(buffer::HROCBuffer,ctr::Int)
     return convexify!(buffer.initial.values,buffer.initial.grid,ctr,buffer.convex.values,buffer.convex.grid)
 end
 
+@doc raw"""
+    HROC{dimp,R1Dir<:RankOneDirections{dimp},T} <: AbstractConvexification
+Holds the specification for performing rank-one convexification by the upper bound described in [this paper](https://arxiv.org/abs/2405.16866).
+Useable by constructing an instance of this type, as well as a buffer by `build_buffer` and calling `convexify` as usual.
+
+# Constructors
+   HROC(maxlevel::Int,n_convexpoints::Int,dir::R1Dir,GLcheck::Bool,start::Tensor{2,dimp,T,dimc},stop::Tensor{2,dimp,T,dimc})
+   HROC(start::Tensor{2,dimp},stop::Tensor{2,dimp};maxlevel=10,l=1,dirs=ParametrizedR1Directions(dimp;l=l),GLcheck=true,n_convexpoints=1000)
+
+# Fields
+- `maxlevel::Int`
+- `n_convexpoints::Int`
+- `dirs::R1Dir`
+- `GLcheck::Bool`
+- `startF::Vector{T}`
+- `endF::Vector{T}`
+
+"""
 struct HROC{dimp,R1Dir<:RankOneDirections{dimp},T} <: AbstractConvexification
     maxlevel::Int
     n_convexpoints::Int
@@ -1241,10 +1259,20 @@ function rankonedir(laminate::Laminate{dim}) where dim
     start_𝐀 = Tensor{2,dim}((i,j)->round(start_𝐀[i,j]))
 end
 
+@doc raw"""    
+    convexify(balt::HROC, buffer::HROCBuffer, W::FUN, F::T1, xargs::Vararg{Any,XN}) -> bt::BinaryLaminationTree
+Performs a hierarchical rank one convexification (HROC) based on the H-sequence characterization of the convex envelope.
+Note that the output of the algorithm is only an upper bound. For a class of problems the provided hull matches the rank-one convex envelope.
+The return of the algorithm can be used to call `eval` which evaluates the constructed binary lamination tree in terms of semi convex envelope value and its derivatives.
+"""
 function convexify(balt::HROC, buffer::HROCBuffer, W::FUN, F::T1, xargs::Vararg{Any,XN}) where {T1,FUN,XN}
     return BinaryLaminationTree(balt,buffer,W,F,xargs...)
 end
 
+@doc raw"""    
+    convexify(prev_bt::BinaryLaminationTree,balt::HROC, buffer::HROCBuffer, W::FUN, F::T1, xargs::Vararg{Any,XN}) -> bt::BinaryLaminationTree
+Performs a hierarchical rank one convexification (HROC) based and enforces laminate continuity by preferring the previous laminate direction.
+"""
 function convexify(prev_bt::BinaryLaminationTree,balt::HROC, buffer::HROCBuffer, W::FUN, F::T1, xargs::Vararg{Any,XN}) where {T1,FUN,XN}
     return BinaryLaminationTree(prev_bt,balt,buffer,W,F,xargs...)
 end
