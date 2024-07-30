@@ -3,14 +3,14 @@ export
     GrahamScan,
     AdaptiveGrahamScan,
     R1Convexification,
-    BALTConvexification,
-    BinaryAdaptiveLaminationTree,
+    HROC,
+    BinaryLaminationTree,
     PolyConvexification,
 #convexification buffers
     ConvexificationBuffer1D,
     AdaptiveConvexificationBuffer1D,
     R1ConvexificationBuffer,
-    BALTBuffer,
+    HROCBuffer,
     PolyConvexificationBuffer,
     build_buffer,
 #convexification functions

@@ -41,7 +41,7 @@ Tensors.Tensor{order,1,T,1}(x::T) where {order,T} = Tensor{order,1}((x,))
 ####################################################
 ####################################################
 
-struct BALTBuffer{T1,T2} <: AbstractConvexificationBuffer
+struct HROCBuffer{T1,T2} <: AbstractConvexificationBuffer
     #concat array for rank-one line convexification input
     initial::ConvexificationBuffer1D{T1,T2}
     #output list of rank-one line convexification
@@ -52,7 +52,7 @@ struct BALTBuffer{T1,T2} <: AbstractConvexificationBuffer
     backward_convex::ConvexificationBuffer1D{T1,T2}
 end
 
-function fill!(baltbuffer::BALTBuffer{T1,T2}) where {T1,T2}
+function fill!(baltbuffer::HROCBuffer{T1,T2}) where {T1,T2}
     Base.fill!(baltbuffer.initial.grid,zero(T1))
     Base.fill!(baltbuffer.initial.values,zero(T2))
     Base.fill!(baltbuffer.convex.grid,zero(T1))
@@ -170,7 +170,7 @@ function concat!(conc_list, a_fw, s_fw, a_bw, s_bw)
     return conc_list
 end
 
-function concat!(buffer::BALTBuffer, ctr_fw::Int, ctr_bw::Int)
+function concat!(buffer::HROCBuffer, ctr_fw::Int, ctr_bw::Int)
     concat!(buffer.initial.grid,buffer.forward_initial.grid,ctr_fw,buffer.backward_initial.grid,ctr_bw)
     concat!(buffer.initial.values,buffer.forward_initial.values,ctr_fw,buffer.backward_initial.values,ctr_bw)
     return buffer

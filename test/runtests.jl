@@ -140,9 +140,9 @@ end
 #    end
 #end
 
-@testset "BALT" begin
+@testset "HROC" begin
     for dim in (2,3)
-        convexification = BALTConvexification(10,500,ParametrizedR1Directions(dim),false,[-2.0 for _ in 1:dim^2],[2.0 for _ in 1:dim^2])
+        convexification = HROC(10,500,ParametrizedR1Directions(dim),false,[-2.0 for _ in 1:dim^2],[2.0 for _ in 1:dim^2])
         buffer = build_buffer(convexification)
         F = zero(Tensor{2,dim})
         bt = convexify(convexification,buffer,W_multi,F)
@@ -151,7 +151,7 @@ end
         @test isapprox(W_val,0.0,atol=1e-4)
         @test isapprox(𝐏,F,atol=1e-4)
 
-        @testset "BALTBuffer" begin
+        @testset "HROCBuffer" begin
             ctr_fw = 4
             ctr_bw = 4
             buffer.forward_initial.grid[1:ctr_fw] .= [0,1,2,3]
@@ -161,7 +161,7 @@ end
         end
 
         @testset "Type stability" begin
-            laminate = @inferred Nothing NumericalRelaxation.baltkernel(BinaryAdaptiveLaminationTree(F,0.0,1.0,0),convexification,buffer,W_multi,zero(Tensor{2,dim}))
+            laminate = @inferred Nothing NumericalRelaxation.hrockernel(BinaryLaminationTree(F,0.0,1.0,0),convexification,buffer,W_multi,zero(Tensor{2,dim}))
             @test laminate.W⁺ == laminate.W⁻ && isapprox(laminate.W⁺,0.0,atol=1e-4) && isapprox(laminate.W⁻,0.0,atol=1e-4)
             if dim ==2
                 @test laminate.F⁺ == Tensor{2,dim}([0.0 0.0; -1.0 0.0])
