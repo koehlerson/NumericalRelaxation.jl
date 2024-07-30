@@ -10,4 +10,6 @@ NumericalRelaxation.ℛ¹Direction
 NumericalRelaxation.ℛ¹DirectionBuffered
 NumericalRelaxation.GradientGridBuffered
 NumericalRelaxation.convexify!
+NumericalRelaxation.HROC
+NumericalRelaxation.convexify
 ```
