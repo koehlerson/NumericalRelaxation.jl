@@ -5,7 +5,7 @@
 ```@docs
 NumericalRelaxation.PolyConvexification
 NumericalRelaxation.PolyConvexificationBuffer
-NumericalRelaxation.convexify
+NumericalRelaxation.convexify(poly_convexification::PolyConvexification, poly_buffer::PolyConvexificationBuffer, Φ::FUN, ν::Union{Vec{d},Vector{Float64}}, xargs::Vararg{Any,XN}; returnDerivs::Bool)
 NumericalRelaxation.ssv
 NumericalRelaxation.Dssv
 NumericalRelaxation.minors

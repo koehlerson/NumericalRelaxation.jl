@@ -1627,6 +1627,7 @@ end
 
 
 @doc raw"""
+    convexify(poly_convexification::PolyConvexification, poly_buffer::PolyConvexificationBuffer, Φ::FUN, ν::Union{Vec{d},Vector{Float64}}, xargs::Vararg{Any,XN}; returnDerivs::Bool=true) where {FUN,XN,d}
 Signed singular value polyconvexification using the linear programming approach.
 Compute approximation to the singular value polycovex envelope of the function `Φ` which is the reformulation of the isotropic function `W`
 in terms of signed singular values $Φ(ν) = W(diagm(ν))$, at the point `ν` via the linear programming approach as discussed in 
