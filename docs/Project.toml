@@ -1,3 +1,4 @@
 [deps]
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
 NumericalRelaxation = "82303a6c-a702-44d7-938a-15dad61d8a03"
+Tensors = "48a634ad-e948-5137-8d70-aa71f2a747f4"
