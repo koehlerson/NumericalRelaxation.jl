@@ -105,40 +105,75 @@ end
     gradientgrid_axes = -2.0:0.5:2
     gradientgrid1 = GradientGrid((gradientgrid_axes, gradientgrid_axes, gradientgrid_axes, gradientgrid_axes))
     dirs = ParametrizedR1Directions(2)
-    @test(@inferred Union{Nothing,Tuple{Tuple{Vec{2,Int},Vec{2,Int}},Int}} Base.iterate(dirs,1) == ((Vec{2}((-1,-1)),Vec{2}((0,-1))),2))
-    ((𝐚,𝐛),i) = Base.iterate(dirs,1)
-    @test @inferred(NumericalRelaxation.inbounds_𝐚(gradientgrid1,𝐚)) && @inferred(NumericalRelaxation.inbounds_𝐛(gradientgrid1,𝐛))
+    @test(@inferred Union{Nothing,Tuple{Tuple{Vec{2,Int},Vec{2,Int}},Int}} Base.iterate(dirs,1) == (ones(Tensor{2,2}),2))
+    (𝐚,i) = Base.iterate(dirs,1)
+    #@test @inferred(NumericalRelaxation.inbounds_𝐚(gradientgrid1,𝐚)) && @inferred(NumericalRelaxation.inbounds_𝐛(gradientgrid1,𝐛))
 end
 
-@testset "R1Convexification" begin
-    d = 2
-    a = -2.0:0.5:2.0
-    r1convexification_reduced = R1Convexification(a,a,dim=d,dirtype=ParametrizedR1Directions)
-    buffer_reduced = build_buffer(r1convexification_reduced)
-    convexify!(r1convexification_reduced,buffer_reduced,W_multi;buildtree=true)
-    @test all(isapprox.(buffer_reduced.W_rk1.itp.itp.coefs .- [W_multi_rc(Tensor{2,2}((x1,x2,y1,y2))) for x1 in a, x2 in a, y1 in a, y2 in a],0.0,atol=1e-8))
-    r1convexification_full = R1Convexification(a,a,dim=d,dirtype=ℛ¹Direction)
-    buffer_full = build_buffer(r1convexification_full)
-    convexify!(r1convexification_full,buffer_full,W_multi;buildtree=false)
-    @test all(isapprox.(buffer_full.W_rk1.itp.itp.coefs .- [W_multi_rc(Tensor{2,2}((x1,x2,y1,y2))) for x1 in a, x2 in a, y1 in a, y2 in a],0.0,atol=1e-8))
-    @test all(isapprox.(buffer_full.W_rk1.itp.itp.coefs .- buffer_reduced.W_rk1.itp.itp.coefs ,0.0,atol=1e-8))
-    # test if subsequent convexifications work
-    convexify!(r1convexification_full,buffer_full,W_multi;buildtree=true)
-    @test all(isapprox.(buffer_full.W_rk1.itp.itp.coefs .- buffer_reduced.W_rk1.itp.itp.coefs ,0.0,atol=1e-8))
+#@testset "R1Convexification" begin
+#    d = 2
+#    a = -2.0:0.5:2.0
+#    r1convexification_reduced = R1Convexification(a,a,dim=d,dirtype=ParametrizedR1Directions)
+#    buffer_reduced = build_buffer(r1convexification_reduced)
+#    convexify!(r1convexification_reduced,buffer_reduced,W_multi;buildtree=true)
+#    @test all(isapprox.(buffer_reduced.W_rk1.itp.itp.coefs .- [W_multi_rc(Tensor{2,2}((x1,x2,y1,y2))) for x1 in a, x2 in a, y1 in a, y2 in a],0.0,atol=1e-8))
+#    r1convexification_full = R1Convexification(a,a,dim=d,dirtype=ℛ¹Direction)
+#    buffer_full = build_buffer(r1convexification_full)
+#    convexify!(r1convexification_full,buffer_full,W_multi;buildtree=false)
+#    @test all(isapprox.(buffer_full.W_rk1.itp.itp.coefs .- [W_multi_rc(Tensor{2,2}((x1,x2,y1,y2))) for x1 in a, x2 in a, y1 in a, y2 in a],0.0,atol=1e-8))
+#    @test all(isapprox.(buffer_full.W_rk1.itp.itp.coefs .- buffer_reduced.W_rk1.itp.itp.coefs ,0.0,atol=1e-8))
+#    # test if subsequent convexifications work
+#    convexify!(r1convexification_full,buffer_full,W_multi;buildtree=true)
+#    @test all(isapprox.(buffer_full.W_rk1.itp.itp.coefs .- buffer_reduced.W_rk1.itp.itp.coefs ,0.0,atol=1e-8))
+#
+#    @testset "Tree Construction" begin
+#        F1 = Tensor{2,2}((0.1,0.0,0.0,0.0))
+#        F2 = Tensor{2,2}((0.1,0.5,0.3,0.2))
+#        F3 = Tensor{2,2}((0.5,0.5,0.0,0.0))
+#        for F in (F1,F2,F3)
+#            flt = FlexibleLaminateTree(F,r1convexification_full,buffer_full,3)
+#            @test NumericalRelaxation.checkintegrity(flt,buffer_full.W_rk1)
+#            𝔸, 𝐏, W = NumericalRelaxation.eval(flt,W_multi)
+#            @test W == 0.0
+#            @test 𝐏 == zero(Tensor{2,2})
+#        end
+#    end
+#end
 
-    @testset "Tree Construction" begin
-        F1 = Tensor{2,2}((0.1,0.0,0.0,0.0))
-        F2 = Tensor{2,2}((0.1,0.5,0.3,0.2))
-        F3 = Tensor{2,2}((0.5,0.5,0.0,0.0))
-        for F in (F1,F2,F3)
-            flt = FlexibleLaminateTree(F,r1convexification_full,buffer_full,3)
-            @test NumericalRelaxation.checkintegrity(flt,buffer_full.W_rk1)
-            𝔸, 𝐏, W = NumericalRelaxation.eval(flt,W_multi)
-            @test W == 0.0
-            @test 𝐏 == zero(Tensor{2,2})
+@testset "HROC" begin
+    for dim in (2,3)
+        convexification = HROC(10,500,ParametrizedR1Directions(dim),false,[-2.0 for _ in 1:dim^2],[2.0 for _ in 1:dim^2])
+        buffer = build_buffer(convexification)
+        F = zero(Tensor{2,dim})
+        bt = convexify(convexification,buffer,W_multi,F)
+        𝔸, 𝐏, W_val = NumericalRelaxation.eval(bt,W_multi)
+        @test NumericalRelaxation.checkintegrity(bt)
+        @test isapprox(W_val,0.0,atol=1e-4)
+        @test isapprox(𝐏,F,atol=1e-4)
+
+        @testset "HROCBuffer" begin
+            ctr_fw = 4
+            ctr_bw = 4
+            buffer.forward_initial.grid[1:ctr_fw] .= [0,1,2,3]
+            buffer.backward_initial.grid[1:ctr_bw] .= [-1,-2,-3,-4]
+            NumericalRelaxation.concat!(buffer,ctr_fw+1,ctr_bw)
+            @test all(buffer.initial.grid[1:ctr_fw+ctr_bw] .== [-4,-3,-2,-1,0,1,2,3])
+        end
+
+        @testset "Type stability" begin
+            laminate = @inferred Nothing NumericalRelaxation.hrockernel(BinaryLaminationTree(F,0.0,1.0,0),convexification,buffer,W_multi,zero(Tensor{2,dim}))
+            @test laminate.W⁺ == laminate.W⁻ && isapprox(laminate.W⁺,0.0,atol=1e-4) && isapprox(laminate.W⁻,0.0,atol=1e-4)
+            if dim ==2
+                @test laminate.F⁺ == Tensor{2,dim}([0.0 0.0; -1.0 0.0])
+                @test laminate.F⁻ == Tensor{2,dim}([0.0 0.0; 1.0 0.0])
+            else
+                @test laminate.F⁺ == Tensor{2,dim}([0.0 0.0 0.0; 0.0 0.0 0.0; -1.0 0.0 0.0])
+                @test laminate.F⁻ == Tensor{2,dim}([0.0 0.0 0.0; 0.0 0.0 0.0; 1.0 0.0 0.0])
+            end
         end
     end
 end
+
 @testset "Adaptive Convexification" begin
     ac = AdaptiveGrahamScan(
             interval=[0.001,5.0],

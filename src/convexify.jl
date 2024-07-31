@@ -850,38 +850,64 @@ Since they are quite small in 2² and 3² the directions are precomputed and sto
 # Fields
 - `dirs::Vector{Tuple{Vec{dimp,T},Vec{dimp,T}}}`
 """
-struct ParametrizedR1Directions{dimp,T} <: RankOneDirections{dimp}
-    dirs::Vector{Tuple{Vec{dimp,T},Vec{dimp,T}}}
+struct ParametrizedR1Directions{dimp,T,dimc} <: RankOneDirections{dimp}
+    dirs::Vector{Tensor{2,dimp,T,dimc}}
 end
 
-function ParametrizedR1Directions(::Val{2})
+function ParametrizedR1Directions(::Val{2};l=1)
     rankdirs = Vector{Tuple{Vec{2,Int},Vec{2,Int}}}()
-    for i in -1:1, j in -1:1, m in 0:1, n in -1:1
+    for i in -l:l, j in -l:l, m in -l:l, n in -l:l
         if (i==j==0) || (m==n==0)
             continue
         else
             push!(rankdirs,(Vec{2}((i,j)),Vec{2}((m,n))))
         end
     end
-    return ParametrizedR1Directions(rankdirs)
+    dirs = [𝐚 ⊗ 𝐛 for (𝐚, 𝐛) in rankdirs]
+    unique!(dirs)
+    return ParametrizedR1Directions(dirs)
 end
 
-function ParametrizedR1Directions(::Val{3})
+function ParametrizedR1Directions(::Val{3};l=1)
     rankdirs = Vector{Tuple{Vec{3,Int},Vec{3,Int}}}()
-    for i in -1:1, j in -1:1, k in -1:1, l in 0:1, m in -1:1, n in -1:1
-        if (i==j==k==0) || (l==m==n==0)
+    for i in -l:l, j in -l:l, k in -l:l, m in -l:l, n in -l:l, o in -l:l
+        if (i==j==k==0) || (m==n==o==0)
             continue
         else
-            push!(rankdirs,(Vec{3}((i,j,k)),Vec{3}((l,m,n))))
+            push!(rankdirs,(Vec{3}((i,j,k)),Vec{3}((m,n,o))))
         end
     end
-    return ParametrizedR1Directions(rankdirs)
+    dirs = [𝐚 ⊗ 𝐛 for (𝐚, 𝐛) in rankdirs]
+    unique!(dirs)
+    return ParametrizedR1Directions(dirs)
 end
 
-ParametrizedR1Directions(dimp::Int) = ParametrizedR1Directions(Val(dimp))
+ParametrizedR1Directions(dimp::Int;l=1) = ParametrizedR1Directions(Val(dimp);l=l)
 ParametrizedR1Directions(gradientgrid::GradientGrid{dimc}) where dimc = ParametrizedR1Directions(isqrt(dimc))
 Base.iterate(d::ParametrizedR1Directions, state=1) = Base.iterate(d.dirs, state)
+Base.length(d::ParametrizedR1Directions) = length(d.dirs)
 
+struct ParametrizedDDirections{dimp,T,dimc} <: RankOneDirections{dimp}
+    dirs::Vector{Tensor{2,dimp,T,dimc}}
+end
+
+function ParametrizedDDirections(::Val{2};l=1)
+    rankdirs = Vector{Tensor{2,2,Float64,4}}()
+    for i in -l:l, j in -l:l, m in -l:l, n in -l:l
+        if (i==j==m==n==0)
+            continue
+        else
+            push!(rankdirs,Tensor{2,2}((i,j,m,n)))
+        end
+    end
+    unique!(rankdirs)
+    return ParametrizedDDirections(rankdirs)
+end
+
+ParametrizedDDirections(dimp::Int;l=1) = ParametrizedDDirections(Val(dimp);l=l)
+ParametrizedDDirections(gradientgrid::GradientGrid{dimc}) where dimc = ParametrizedDDirections(isqrt(dimc))
+Base.iterate(d::ParametrizedDDirections, state=1) = Base.iterate(d.dirs, state)
+Base.length(d::ParametrizedDDirections) = length(d.dirs)
 
 @doc raw"""
     R1Convexification{dimp,dimc,dirtype<:RankOneDirections{dimp},T1,T2,R} <: Convexification
@@ -1027,7 +1053,7 @@ end
 Rank-one line convexification algorithm in multiple dimensions without deletion, but in $\mathcal{O}(N)$
 """
 function convexify!(f, x, ctr, h, y)
-    fill!(h,zero(eltype(h))); fill!(y,zero(eltype(y)))
+    Base.fill!(h,zero(eltype(h))); Base.fill!(y,zero(eltype(y)))
     last = 2
     h[1] = f[1]; h[2] = f[2];
     y[1] = x[1]; y[2] = x[2];
@@ -1049,6 +1075,496 @@ function convexify!(f, x, ctr, h, y)
     λ = (h[j]-h[j-1]) / (y[j]-y[j-1])
     g_ss = h[j-1] + λ * -y[j-1]
     return g_ss, j
+end
+
+function convexify!(buffer::HROCBuffer,ctr::Int)
+    return convexify!(buffer.initial.values,buffer.initial.grid,ctr,buffer.convex.values,buffer.convex.grid)
+end
+
+@doc raw"""
+    HROC{dimp,R1Dir<:RankOneDirections{dimp},T} <: AbstractConvexification
+Holds the specification for performing rank-one convexification by the upper bound described in [this paper](https://arxiv.org/abs/2405.16866).
+Useable by constructing an instance of this type, as well as a buffer by `build_buffer` and calling `convexify` as usual.
+
+# Constructors
+    HROC(maxlevel::Int,n_convexpoints::Int,dir::R1Dir,GLcheck::Bool,start::Tensor{2,dimp,T,dimc},stop::Tensor{2,dimp,T,dimc})
+    HROC(start::Tensor{2,dimp},stop::Tensor{2,dimp};maxlevel=10,l=1,dirs=ParametrizedR1Directions(dimp;l=l),GLcheck=true,n_convexpoints=1000)
+
+# Fields
+- `maxlevel::Int`
+- `n_convexpoints::Int`
+- `dirs::R1Dir`
+- `GLcheck::Bool`
+- `startF::Vector{T}`
+- `endF::Vector{T}`
+
+"""
+struct HROC{dimp,R1Dir<:RankOneDirections{dimp},T} <: AbstractConvexification
+    maxlevel::Int
+    n_convexpoints::Int
+    dirs::R1Dir
+    GLcheck::Bool
+    startF::Vector{T}
+    endF::Vector{T}
+end
+
+function HROC(maxlevel::Int,n_convexpoints::Int,dir::R1Dir,GLcheck::Bool,start::Tensor{2,dimp,T,dimc},stop::Tensor{2,dimp,T,dimc}) where {dimp,R1Dir<:RankOneDirections{dimp},T,dimc}
+    HROC(maxlevel,n_convexpoints,dir,GLcheck,collect(start.data),collect(stop.data))
+end
+
+HROC(start::Tensor{2,dimp},stop::Tensor{2,dimp};maxlevel=10,l=1,dirs=ParametrizedR1Directions(dimp;l=l),GLcheck=true,n_convexpoints=1000) where {dimp} = HROC(maxlevel,n_convexpoints,dirs,GLcheck,start,stop)
+
+function build_buffer(convexification::HROC{dimp,R1Dir,T}) where {dimp,R1Dir <: RankOneDirections{dimp}, T}
+    F = zeros(Int,convexification.n_convexpoints+2)
+    W = zeros(T,convexification.n_convexpoints+2)
+    buffer = ConvexificationBuffer1D(F,W)
+    return HROCBuffer(buffer,deepcopy(buffer),deepcopy(buffer),deepcopy(buffer),deepcopy(buffer),deepcopy(buffer))
+end
+
+function δ(convexification::HROC{dimp,R1Dir,T1},A::Tensor{2,dimp,T2,dimc}) where {dimp,R1Dir<:RankOneDirections{dimp},T1,T2,dimc}
+    startF = convexification.startF
+    endF = convexification.endF
+    newvals = ntuple(i->A[i] != 0 ? (endF[i] - startF[i])/convexification.n_convexpoints : Inf,dimc)
+    return Tensor{2,dimp,T1,dimc}(newvals)
+end
+
+function inbounds(𝐱::Tensor{2,dimp,T,dimc}, convexification::HROC) where {dimp,T,dimc}
+    return all(ntuple(i->convexification.startF[i] ≤ 𝐱[i] ≤ convexification.endF[i],dimc))
+end
+
+rotation_matrix(θ) = Tensor{2,2}((cos(θ), sin(θ), -sin(θ), cos(θ)))
+function isorthogonal(laminate::Laminate, 𝐀::Tensor{2,2})
+    orthogonal = false
+    for θ in (π/2, -π/2)
+        Q = rotation_matrix(θ)
+        if isapprox(Q ⋅ laminate.A ⋅ Q', 𝐀, atol=1e-10)
+            orthogonal = true
+            break
+        end
+    end
+    return orthogonal
+end
+isorthogonal(laminate::Nothing, 𝐀::Tensor{2}) = false
+
+mutable struct BinaryLaminationTree{dim,T,N}
+    F::Tensor{2,dim,T,N}
+    W::T
+    ξ::T
+    level::Int
+    parent::Union{BinaryLaminationTree{dim,T,N},Nothing}
+    minus::Union{BinaryLaminationTree{dim,T,N},Nothing}
+    plus::Union{BinaryLaminationTree{dim,T,N},Nothing}
+end
+
+BinaryLaminationTree(F,W,ξ,l) = BinaryLaminationTree(F,W,ξ,l,nothing,nothing,nothing)
+BinaryLaminationTree(F,W,ξ,l,parent) = BinaryLaminationTree(F,W,ξ,l,parent,nothing,nothing)
+BinaryLaminationTree(cs::HROC{dimp}) where dimp = BinaryLaminationTree(one(Tensor{2,dimp}),0.0,0.0,cs.maxlevel,nothing,nothing,nothing)
+
+function BinaryLaminationTree(convexification::HROC, buffer::HROCBuffer, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
+    level = convexification.maxlevel
+    root = BinaryLaminationTree(F, 0.0, 1.0, level + 1)
+    laminate = hrockernel(root,convexification,buffer,W,F,xargs...)
+    if laminate === nothing
+        return root
+    end
+    queue = [(root, laminate)]
+
+    while !isempty(queue)
+        parent, lc = pop!(queue)
+        ξ = norm(parent.F - lc.F⁻) / norm(lc.F⁺ - lc.F⁻)
+        if isapprox(ξ,1.0,atol=1e-10) || isapprox(ξ,0.0,atol=1e-10)
+            continue
+        end
+        parent.minus = BinaryLaminationTree(lc.F⁻, lc.W⁻, (1.0 - ξ), level, parent)
+        parent.plus = BinaryLaminationTree(lc.F⁺, lc.W⁺, ξ, level, parent)
+        level = parent.level - 1
+        if level > 0
+            laminate⁺ = hrockernel(root,convexification,buffer,W,lc.F⁺,xargs...)
+            laminate⁻ = hrockernel(root,convexification,buffer,W,lc.F⁻,xargs...)
+            !(laminate⁺ === nothing) && push!(queue,(parent.plus, laminate⁺))
+            !(laminate⁻ === nothing) && push!(queue,(parent.minus,laminate⁻))
+        end
+    end
+    return root
+end
+
+function BinaryLaminationTree(prev_bt::BinaryLaminationTree, convexification::HROC, buffer::HROCBuffer, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
+    level = convexification.maxlevel
+    root = BinaryLaminationTree(F, 0.0, 1.0, level + 1)
+    if prev_bt.plus === nothing && prev_bt.minus === nothing
+        laminate = hrockernel(root,convexification,buffer,W,F,xargs...)
+    else
+        start_𝐀 = rankonedir(prev_bt)
+        laminate = laminatekernel(start_𝐀,convexification,buffer,W,F,xargs...)
+        if laminate === nothing # different direction yields a new laminate?
+           laminate = hrockernel(root,convexification,buffer,W,F,xargs...)
+        end
+    end
+    if laminate === nothing
+        return root
+    end
+    queue = [(root, laminate)]
+
+    while !isempty(queue)
+        parent, lc = pop!(queue)
+        ξ = norm(parent.F - lc.F⁻) / norm(lc.F⁺ - lc.F⁻)
+        if isapprox(ξ,1.0,atol=1e-10) || isapprox(ξ,0.0,atol=1e-10)
+            continue
+        end
+        #dirsvd = svd(lc.F⁻ - lc.F⁺)
+        #dirrank = count(x -> x > 1e-8, dirsvd.S)
+        #if dirrank == 1
+            parent.minus = BinaryLaminationTree(lc.F⁻, lc.W⁻, (1.0 - ξ), level, parent)
+            parent.plus = BinaryLaminationTree(lc.F⁺, lc.W⁺, ξ, level, parent)
+            level = parent.level - 1
+            if level > 0
+                laminate⁺ = hrockernel(root,convexification,buffer,W,lc.F⁺,xargs...)
+                laminate⁻ = hrockernel(root,convexification,buffer,W,lc.F⁻,xargs...)
+                !(laminate⁺ === nothing) && push!(queue,(parent.plus, laminate⁺))
+                !(laminate⁻ === nothing) && push!(queue,(parent.minus,laminate⁻))
+            end
+        #else
+        #    decompositionstack = [(parent,1,1)]
+        #    n = 1
+        #    while !isempty(decompositionstack)
+        #        pivotnode, pivot_i, depth = pop!(decompositionstack)
+        #        pivot_i = pivot_i > dirrank ? pivot_i % dirrank : pivot_i
+        #        (depth > n+1) && continue
+        #        ui = Vec{dim}(abs.(@view(dirsvd.U[:,pivot_i])))
+        #        vi = Vec{dim}(abs.(@view(dirsvd.Vt[:,pivot_i])))
+        #        si = dirsvd.S[pivot_i]
+        #        A = ui ⊗ vi
+        #        F⁻ = pivotnode.F - ((root.F - lc.F⁻) ⋅ A)/(depth)
+        #        F⁺ = pivotnode.F - ((root.F - lc.F⁺) ⋅ A)/(depth)
+        #        ξ = norm(pivotnode.F - F⁻) / norm(F⁺ - F⁻)
+        #        pivotnode.minus = BinaryLaminationTree(F⁻, W(F⁻,xargs...), (1.0 - ξ), level, pivotnode)
+        #        pivotnode.plus = BinaryLaminationTree(F⁺, W(F⁺,xargs...), ξ, level, pivotnode)
+        #        push!(decompositionstack,(pivotnode.plus, pivot_i+1,depth+1))
+        #        push!(decompositionstack,(pivotnode.minus,pivot_i+1,depth+1))
+        #    end
+        #end
+    end
+    return root
+end
+
+function rankonedir(node::BinaryLaminationTree{dim}) where dim
+    start_𝐀 = node.plus.F - node.minus.F
+    start_𝐀 /= minimum(x->isapprox(abs(x),0,atol=1e-10) ? Inf : x, start_𝐀) #normalize direction and filter out zeros
+    start_𝐀 = Tensor{2,dim}((i,j)->round(start_𝐀[i,j]))
+end
+
+function rankonedir(laminate::Laminate{dim}) where dim
+    start_𝐀 = laminate.F⁺ - laminate.F⁻
+    start_𝐀 /= minimum(x->isapprox(abs(x),0,atol=1e-10) ? Inf : x, start_𝐀) #normalize direction and filter out zeros
+    start_𝐀 = Tensor{2,dim}((i,j)->round(start_𝐀[i,j]))
+end
+
+@doc raw"""    
+    convexify(hroc::HROC, buffer::HROCBuffer, W::FUN, F::T1, xargs::Vararg{Any,XN}) -> bt::BinaryLaminationTree
+Performs a hierarchical rank one convexification (HROC) based on the H-sequence characterization of the convex envelope.
+Note that the output of the algorithm is only an upper bound. For a class of problems the provided hull matches the rank-one convex envelope.
+The return of the algorithm can be used to call `eval` which evaluates the constructed binary lamination tree in terms of semi convex envelope value and its derivatives.
+"""
+function convexify(hroc::HROC, buffer::HROCBuffer, W::FUN, F::T1, xargs::Vararg{Any,XN}) where {T1,FUN,XN}
+    return BinaryLaminationTree(hroc,buffer,W,F,xargs...)
+end
+
+@doc raw"""    
+    convexify(prev_bt::BinaryLaminationTree,hroc::HROC, buffer::HROCBuffer, W::FUN, F::T1, xargs::Vararg{Any,XN}) -> bt::BinaryLaminationTree
+Performs a hierarchical rank one convexification (HROC) based and enforces laminate continuity by preferring the previous laminate direction.
+"""
+function convexify(prev_bt::BinaryLaminationTree,hroc::HROC, buffer::HROCBuffer, W::FUN, F::T1, xargs::Vararg{Any,XN}) where {T1,FUN,XN}
+    return BinaryLaminationTree(prev_bt,hroc,buffer,W,F,xargs...)
+end
+
+function stretchfilter(F)
+    C = tdot(F)
+    eigen_ = eigen(C)
+    if !all(eigen_.values .> 0)
+        return zero(F)
+    else
+        return sqrt(C)
+    end
+end
+
+function hrockernel(root::BinaryLaminationTree, convexification::HROC, buffer::HROCBuffer, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
+    W_ref = W(F,xargs...)
+    𝔸_ref, _, W_glob_ref = eval(root,W,xargs...)
+    laminate = nothing
+    for 𝐀 in convexification.dirs
+        fill!(buffer) # fill buffers with zeros
+        #𝐀::Tensor{2,dim,T,N} = (𝐚 ⊗ 𝐛)
+        _δ = minimum(δ(convexification, 𝐀))
+        𝐀 *= _δ
+        if norm(𝐀,Inf) > 0
+            ctr_fw = 0
+            ctr_bw = 0
+            for dir in (-1, 1)
+                if dir==-1
+                    #𝐱_prefilter = F - 𝐀 # init dir
+                    𝐱 = F - 𝐀 # init dir
+                    ell = -1 # start at -1, so - 𝐀
+                else
+                    #𝐱_prefilter = F # init dir
+                    𝐱 = F # init dir
+                    ell = 0 # start at 0
+                end
+                while inbounds(𝐱,convexification) && (convexification.GLcheck ? det(𝐱) > 1e-6 : true)
+                    val = W(𝐱,xargs...)
+                    if dir == 1
+                        buffer.forward_initial.values[ctr_fw+1] = val
+                        buffer.forward_initial.grid[ctr_fw+1] = ell
+                        ctr_fw += 1
+                    else
+                        buffer.backward_initial.values[ctr_bw+1] = val
+                        buffer.backward_initial.grid[ctr_bw+1] = ell
+                        ctr_bw += 1
+                    end
+                    𝐱 += dir*𝐀
+                    ell += dir
+                end
+            end
+            if ((ctr_fw > 0) && (ctr_bw > 0))
+                concat!(buffer,ctr_fw+1,ctr_bw)
+                Wᶜ, j = convexify!(buffer,ctr_bw+ctr_fw)
+                l₁ = buffer.convex.grid[j-1]
+                l₂ = buffer.convex.grid[j]
+                F⁻ = F + l₁*𝐀
+                F⁺ = F + l₂*𝐀
+                W⁻ = W(F⁻,xargs...)
+                W⁺ = W(F⁺,xargs...)
+                lc = Laminate(F⁻,F⁺,W⁻,W⁺,𝐀,0)
+                𝔸, _, W_glob_trial = eval(root,F,lc,W,xargs...)
+                if (Wᶜ <= W_ref) #|| (W_glob_trial <= W_glob_ref) #|| (𝐀 ⊡ 𝔸_ref ⊡ 𝐀 < 𝐀 ⊡ 𝔸 ⊡ 𝐀)
+                    W_ref = Wᶜ
+                    𝔸_ref = 𝔸
+                    W_glob_ref = W_glob_trial
+                    laminate = lc
+                end
+            end
+        end
+    end
+    return laminate
+end
+
+function laminatekernel(𝐀::Tensor{2,dim,T,N},convexification::HROC, buffer::HROCBuffer, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
+    W_ref = W(F,xargs...)
+    laminate = nothing
+    fill!(buffer) # fill buffers with zeros
+    _δ = minimum(δ(convexification, 𝐀))
+    𝐀 *= _δ
+    ctr_fw = 0
+    ctr_bw = 0
+    for dir in (-1, 1)
+        if dir==-1
+            𝐱 = F - 𝐀 # init dir
+            ell = -1 # start at -1, so - 𝐀
+        else
+            𝐱 = F # init dir
+            ell = 0 # start at 0
+        end
+        while inbounds(𝐱,convexification) && (convexification.GLcheck ? det(𝐱) > 1e-6 : true)
+            val = W(𝐱,xargs...)
+            if dir == 1
+                buffer.forward_initial.values[ctr_fw+1] = val
+                buffer.forward_initial.grid[ctr_fw+1] = ell
+                ctr_fw += 1
+            else
+                buffer.backward_initial.values[ctr_bw+1] = val
+                buffer.backward_initial.grid[ctr_bw+1] = ell
+                ctr_bw += 1
+            end
+            𝐱 += dir*𝐀
+            ell += dir
+        end
+    end
+    if ((ctr_fw > 0) && (ctr_bw > 0))
+        concat!(buffer,ctr_fw+1,ctr_bw)
+        Wᶜ, j = convexify!(buffer,ctr_bw+ctr_fw)
+        if (Wᶜ < W_ref) #|| isapprox(Wᶜ,W_ref,atol=1e-8) # && !isorthogonal(laminate,𝐀)
+            W_ref = Wᶜ
+            l₁ = buffer.convex.grid[j-1]
+            l₂ = buffer.convex.grid[j]
+            F⁻ = F + l₁*𝐀
+            F⁺ = F + l₂*𝐀
+            W⁻ = W(F⁻,xargs...)
+            W⁺ = W(F⁺,xargs...)
+            laminate = Laminate(F⁻,F⁺,W⁻,W⁺,𝐀,0)
+        end
+    end
+    return laminate
+end
+
+function eval(node::BinaryLaminationTree{dim}, W_nonconvex::FUN, xargs::Vararg{Any,XN}) where {dim,FUN,XN}
+    W = 0.0
+    𝐏 = zero(Tensor{2,dim})
+    𝔸 = zero(Tensor{4,dim})
+    if node.minus === nothing && node.plus === nothing
+        𝔸_temp, 𝐏_temp, W_temp = Tensors.hessian(y -> W_nonconvex(y, xargs...), node.F, :all)
+        W += W_temp; 𝐏 += 𝐏_temp; 𝔸 += 𝔸_temp
+    else
+        𝔸⁻, 𝐏⁻, W⁻ = eval(node.minus,W_nonconvex,xargs...)
+        𝔸⁺, 𝐏⁺, W⁺ = eval(node.plus,W_nonconvex,xargs...)
+        ξ = node.plus.ξ
+        W += ξ*W⁺+(1-ξ)*W⁻; 𝐏 += ξ*𝐏⁺+(1-ξ)*𝐏⁻; 𝔸 += ξ*𝔸⁺+(1-ξ)*𝔸⁻
+    end
+    return 𝔸, 𝐏, W
+end
+
+function eval(node::BinaryLaminationTree{dim}, F::Tensor{2,dim}, laminate::Laminate{dim}, W_nonconvex::FUN, xargs::Vararg{Any,XN}) where {dim,FUN,XN}
+    W = 0.0
+    𝐏 = zero(Tensor{2,dim})
+    𝔸 = zero(Tensor{4,dim})
+    if node.minus === nothing && node.plus === nothing
+        if node.F ≈ F
+            𝔸⁻, 𝐏⁻, W⁻ = Tensors.hessian(y -> W_nonconvex(y, xargs...), laminate.F⁻, :all)
+            𝔸⁺, 𝐏⁺, W⁺ = Tensors.hessian(y -> W_nonconvex(y, xargs...), laminate.F⁺, :all)
+            ξ = norm(F - laminate.F⁻) / norm(laminate.F⁺ - laminate.F⁻)
+            W += ξ*W⁺+(1-ξ)*W⁻; 𝐏 += ξ*𝐏⁺+(1-ξ)*𝐏⁻; 𝔸 += ξ*𝔸⁺+(1-ξ)*𝔸⁻
+        else
+            𝔸_temp, 𝐏_temp, W_temp = Tensors.hessian(y -> W_nonconvex(y, xargs...), node.F, :all)
+            W += W_temp; 𝐏 += 𝐏_temp; 𝔸 += 𝔸_temp
+        end
+    else
+        𝔸⁻, 𝐏⁻, W⁻ = eval(node.minus,F,laminate,W_nonconvex,xargs...)
+        𝔸⁺, 𝐏⁺, W⁺ = eval(node.plus,F,laminate,W_nonconvex,xargs...)
+        ξ = node.plus.ξ
+        W += ξ*W⁺+(1-ξ)*W⁻; 𝐏 += ξ*𝐏⁺+(1-ξ)*𝐏⁻; 𝔸 += ξ*𝔸⁺+(1-ξ)*𝔸⁻
+    end
+    return 𝔸, 𝐏, W
+end
+
+function checkintegrity(tree::BinaryLaminationTree,tol=1e-4)
+    isintegre = true
+    for node in AbstractTrees.StatelessBFS(tree)
+        if node.minus === nothing && node.plus === nothing
+            continue
+        end
+        F = node.F
+        W = node.W
+        points = [node.minus.F, node.plus.F]
+        weights = [node.minus.ξ, node.plus.ξ]
+        W_values = [node.minus.W, node.plus.W]
+        isintegre = isapprox(F,sum(points .* weights),atol=tol) && rank(points[2] - points[1]) < 2
+        if !isintegre
+            isintegre = false
+            break
+        end
+    end
+    return isintegre
+end
+
+function rotation_tensor(F::Tensor{2})
+    n = 0
+    prev = one(F)
+    while !isapprox(prev,F)
+       n += 1
+       prev = F
+       F = 0.5*(F + inv(F)')
+    end
+    return F
+end
+
+function rotationangles(R::Tensor{2,2})
+    return acos(R[1])
+end
+
+function rotationangles(R::Tensor{2,3})
+    if R[3,1] != 1 || R[3,1] != -1
+        θ = -asin(R[3,1])
+        # θ₂ = π - θ ignored
+        ψ = atan(R[3,2]/cos(θ),R[3,3]/cos(θ))
+        ϕ = atan(R[2,1]/cos(θ),R[1,1]/cos(θ))
+    else
+        ϕ = 0
+        if R[3,1] == -1
+            θ = π/2
+            ψ = atan(R[1,2],R[1,3])
+        else
+            θ = -π/2
+            ψ = atan(-R[1,2],-R[1,3])
+        end
+    end
+    return (ψ,θ,ϕ)
+end
+
+function rotate!(bt::BinaryLaminationTree,args...)
+    for node in PreOrderDFS(bt)
+        node.F = Tensors.rotate(node.F,args...)
+    end
+end
+
+function rotate(bt::BinaryLaminationTree,args...)
+    new_bt = deepcopy(bt)
+    rotate!(new_bt,args...)
+    return new_bt
+end
+
+function rotationaverage(bt::BinaryLaminationTree{2},W::FUN,xargs::Vararg{Any,N}) where {FUN,N}
+    #angle = rotation_tensor(bt.F) |> rotationangles
+    𝔸, 𝐏, W_ref = eval(bt, W, xargs...)
+    bt_rotate = rotate(bt,0)
+    angles = pi/180:pi/180:pi
+    counter = 1
+    for α in angles
+        rotate!(bt_rotate,α)
+        𝔸_r, 𝐏_r, W_r = eval(bt_rotate, W, xargs...)
+        if isapprox(W_r,W_ref)
+            𝔸 += 𝔸_r; 𝐏 += 𝐏_r; W_ref += W_r
+            counter += 1
+        end
+        rotate!(bt_rotate,-α) #rotate back
+    end
+    return 𝔸/counter, 𝐏/counter, W_ref/counter
+end
+
+function rotationaverage(bt::BinaryLaminationTree{3},W::FUN,xargs::Vararg{Any,N}) where {FUN,N}
+    𝔸, 𝐏, W_ref = eval(bt, W, xargs...)
+    bt_rotate = rotate(bt,0,0,0)
+    angles = pi/10:pi/10:pi
+    counter = 1
+    for α ∈ angles, β ∈ angles, γ ∈ angles
+        rotate!(bt_rotate,α,β,γ)
+        𝔸_r, 𝐏_r, W_r = eval(bt_rotate, W, xargs...)
+        if isapprox(W_r,W_ref)
+            𝔸 += 𝔸_r; 𝐏 += 𝐏_r; W_ref += W_r
+            counter += 1
+        end
+        rotate!(bt_rotate,-α,-β,-γ) #rotate back
+    end
+    return 𝔸/counter, 𝐏/counter, W_ref/counter
+end
+
+function equilibrium(node,W::FUN,xargs::Vararg{Any,N}) where {FUN,N}
+   isroot(node) && return (0.0,children(node))
+   p = AbstractTrees.parent(node)
+   sibling = node == p.plus ? p.minus : p.plus
+   λ₁ = node.ξ; λ₂ = sibling.ξ
+   A = node == p.plus ? node.F - sibling.F : sibling.F - node.F
+   W⁺ = node == p.plus ? node.W : sibling.W
+   W⁻ = node == p.minus ? node.W : sibling.W
+   P₁ = Tensors.gradient(y->W(y,xargs...),node.F)
+   P₂ = Tensors.gradient(y->W(y,xargs...),sibling.F)
+   return ((W⁺-W⁻)-((λ₁*P₁+λ₂*P₂)⊡(A)),children(node))
+end
+
+AbstractTrees.printnode(io::IO, node::BinaryLaminationTree) = print(io, "$(node.F) ξ=$(node.ξ)")
+AbstractTrees.ParentLinks(::Type{<:BinaryLaminationTree}) = AbstractTrees.StoredParents()
+AbstractTrees.SiblingLinks(::Type{<:BinaryLaminationTree}) = AbstractTrees.ImplicitSiblings()
+Base.show(io::IO, ::MIME"text/plain", tree::BinaryLaminationTree) = AbstractTrees.print_tree(io, tree)
+Base.eltype(::Type{<:AbstractTrees.TreeIterator{BinaryLaminationTree{dim,T,N}}}) where {dim,T,N} = BinaryLaminationTree{dim,T,N}
+Base.IteratorEltype(::Type{<:AbstractTrees.TreeIterator{BinaryLaminationTree{dim,T,N}}}) where {dim,T,N} = Base.HasEltype()
+
+AbstractTrees.parent(node::BinaryLaminationTree) = node.parent
+function AbstractTrees.children(node::BinaryLaminationTree)
+    if !isnothing(node.minus)
+        if !isnothing(node.plus)
+            return (node.minus, node.plus)
+        end
+        return (node.left,)
+    end
+    !isnothing(node.plus) && return (node.plus,)
+    return ()
 end
 
 
@@ -1106,11 +1622,12 @@ end
 
 function build_buffer(poly_convexification::PolyConvexification)
     nrpoints = length(poly_convexification.grid)
-    return PolyConvexificationBuffer(zeros(nrpoints), fill!(Vector{Bool}(undef, nrpoints), false))
+    return PolyConvexificationBuffer(zeros(nrpoints), Base.fill!(Vector{Bool}(undef, nrpoints), false))
 end
 
 
 @doc raw"""
+    convexify(poly_convexification::PolyConvexification, poly_buffer::PolyConvexificationBuffer, Φ::FUN, ν::Union{Vec{d},Vector{Float64}}, xargs::Vararg{Any,XN}; returnDerivs::Bool=true) where {FUN,XN,d}
 Signed singular value polyconvexification using the linear programming approach.
 Compute approximation to the singular value polycovex envelope of the function `Φ` which is the reformulation of the isotropic function `W`
 in terms of signed singular values $Φ(ν) = W(diagm(ν))$, at the point `ν` via the linear programming approach as discussed in 

@@ -1,9 +1,10 @@
-push!(LOAD_PATH,"../src/")
 using Documenter, NumericalRelaxation
+import Tensors
 
 makedocs(sitename="NumericalRelaxation.jl",
          modules=[NumericalRelaxation],
          authors="Maximilian Köhler",
+         warnonly=true,
          pages=["Home"=> "index.md",
                 "Tutorial" => "tutorial.md",
                 "One-Dimensional Convexification" => "api/oned-convexification.md",

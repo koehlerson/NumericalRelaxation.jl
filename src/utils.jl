@@ -41,38 +41,62 @@ Tensors.Tensor{order,1,T,1}(x::T) where {order,T} = Tensor{order,1}((x,))
 ####################################################
 ####################################################
 
+struct HROCBuffer{T1,T2} <: AbstractConvexificationBuffer
+    #concat array for rank-one line convexification input
+    initial::ConvexificationBuffer1D{T1,T2}
+    #output list of rank-one line convexification
+    convex::ConvexificationBuffer1D{T1,T2}
+    forward_initial::ConvexificationBuffer1D{T1,T2}
+    backward_initial::ConvexificationBuffer1D{T1,T2}
+    forward_convex::ConvexificationBuffer1D{T1,T2}
+    backward_convex::ConvexificationBuffer1D{T1,T2}
+end
+
+function fill!(baltbuffer::HROCBuffer{T1,T2}) where {T1,T2}
+    Base.fill!(baltbuffer.initial.grid,zero(T1))
+    Base.fill!(baltbuffer.initial.values,zero(T2))
+    Base.fill!(baltbuffer.convex.grid,zero(T1))
+    Base.fill!(baltbuffer.convex.values,zero(T2))
+    Base.fill!(baltbuffer.forward_initial.grid,zero(T1))
+    Base.fill!(baltbuffer.forward_initial.values,zero(T2))
+    Base.fill!(baltbuffer.forward_convex.grid,zero(T1))
+    Base.fill!(baltbuffer.forward_convex.values,zero(T2))
+    Base.fill!(baltbuffer.backward_initial.grid,zero(T1))
+    Base.fill!(baltbuffer.backward_initial.values,zero(T2))
+    Base.fill!(baltbuffer.backward_convex.grid,zero(T1))
+    Base.fill!(baltbuffer.backward_convex.values,zero(T2))
+end
+
 struct Laminate{dim,T,N}
     F⁺::Tensor{2,dim,T,N}
-    F¯::Tensor{2,dim,T,N}
+    F⁻::Tensor{2,dim,T,N}
     A::Tensor{2,dim,T,N}
     W⁺::T
-    W¯::T
+    W⁻::T
     k::Int
     function Laminate(F₁::Tensor{2,dim,T,N}, F₂::Tensor{2,dim,T,N}, W₁::T, W₂::T, A::Tensor{2,dim,T,N}, k::Int) where {dim,T,N}
         F⁺ = zero(Tensor{2,dim})
-        F¯ = zero(Tensor{2,dim})
+        F⁻ = zero(Tensor{2,dim})
         W⁺ = zero(W₁)
-        W¯ = zero(W₂)
-        normW₁ = abs(W₁)
-        normW₂ = abs(W₂)
-        if normW₁ > normW₂ #TODO fix me
+        W⁻ = zero(W₂)
+        if W₁ > W₂ #TODO fix me
             # F₁ > F₂ -> 1 = + und 2 = -
             F⁺ = F₁
             W⁺ = W₁
-            F¯ = F₂
-            W¯ = W₂
+            F⁻ = F₂
+            W⁻ = W₂
         else #1 = - und 2 = +
             F⁺ = F₂
             W⁺ = W₂
-            F¯ = F₁
-            W¯ = W₁
+            F⁻ = F₁
+            W⁻ = W₁
         end
-        new{dim,T,N}(F⁺, F¯, A, W⁺, W¯, k)
+        new{dim,T,N}(F⁺, F⁻, A, W⁺, W⁻, k)
     end
 end
 
 function Base.show(io::IO, ::MIME"text/plain", laminate::Laminate{dim}) where {dim}
-    println(io,"$(dim)D Laminate: F¯=$(laminate.F¯),F⁺=$(laminate.F⁺), level=$(laminate.k)")
+    println(io,"$(dim)D Laminate: F⁻=$(laminate.F⁻),F⁺=$(laminate.F⁺), level=$(laminate.k)")
 end
 
 struct LaminateTree{dim,T,N}
@@ -82,7 +106,7 @@ end
 function Base.show(io::IO, ::MIME"text/plain", laminatetree::LaminateTree{dim}) where dim
     println("$(dim)D Laminatetree")
     for laminate in laminatetree.laminates
-        println(io,"\t"^(laminate.k-1)* "k=$(laminate.k) "* "F¯=$(laminate.F¯), F⁺=$(laminate.F⁺)")
+        println(io,"\t"^(laminate.k-1)* "k=$(laminate.k) "* "F⁻=$(laminate.F⁻), F⁺=$(laminate.F⁺)")
     end
 end
 
@@ -139,11 +163,17 @@ function concat!(conc_list, a_fw, s_fw, a_bw, s_bw)
         conc_list[ctr] = a_bw[j]
         ctr += 1
     end
-    for j in 1:1:s_fw
+    for j in 1:1:s_fw-1
         conc_list[ctr] = a_fw[j]
         ctr += 1
     end
     return conc_list
+end
+
+function concat!(buffer::HROCBuffer, ctr_fw::Int, ctr_bw::Int)
+    concat!(buffer.initial.grid,buffer.forward_initial.grid,ctr_fw,buffer.backward_initial.grid,ctr_bw)
+    concat!(buffer.initial.values,buffer.forward_initial.values,ctr_fw,buffer.backward_initial.values,ctr_bw)
+    return buffer
 end
 
 ####################################################

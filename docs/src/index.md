@@ -24,6 +24,7 @@ Two methods implement the convexification in the one-dimensional case and one me
 for one-dimensional convexification and
 
 - [`R1Convexification`](@ref)
+- [`HROC`](@ref)
 
 for the rank-one convexification.
 
