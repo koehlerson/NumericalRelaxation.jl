@@ -11,6 +11,6 @@ NumericalRelaxation.ℛ¹DirectionBuffered
 NumericalRelaxation.GradientGridBuffered
 NumericalRelaxation.convexify!
 NumericalRelaxation.HROC
-NumericalRelaxation.convexify(hroc::HROC,buffer::HROCBuffer,W::FUN,F::T1,xargs::Vararg{Any,XN})
-NumericalRelaxation.convexify(prev_bt::BinaryLaminationTree,hroc::HROC,buffer::HROCBuffer,W::FUN,F::T1,xargs::Vararg{Any,XN})
+NumericalRelaxation.convexify(hroc::HROC,buffer::HROCBuffer,W::FUN,F::T1,xargs::Vararg{Any,XN}) where {T1,FUN,XN}
+NumericalRelaxation.convexify(prev_bt::BinaryLaminationTree,hroc::HROC,buffer::HROCBuffer,W::FUN,F::T1,xargs::Vararg{Any,XN}) where {T1,FUN,XN}
 ```
