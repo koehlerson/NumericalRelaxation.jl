@@ -281,13 +281,11 @@ function check_slope(F::Vector{T2}, W::Vector{T1}) where {T2,T1}
             r = iterator(m, mask; dir=1)
         end
     end
-    F_info = zeros(typeof(F[1]),1)
-    F_info[1] = F[1]
-    for i in 2:length(F)-1
-        (mask[i-1]==0) && (mask[i]==1) ? push!(F_info,F[i]) : nothing
-        (mask[i]==1) && (mask[i+1]==0) ? push!(F_info,F[i]) : nothing
+    F_info = Vector{Tuple{typeof(F[1]),typeof(F[1])}}()
+    for i in 1:length(F)
+        i>1 && (mask[i-1]==0) && (mask[i]==1) ? (F_info[end]=(F_info[end][1],F[i])) : nothing
+        i<length(F) && (mask[i]==1) && (mask[i+1]==0) && push!(F_info,(F[i],zero(F[i])))
     end
-    push!(F_info,F[end])
     return F_info, lim_reached
 end
 
