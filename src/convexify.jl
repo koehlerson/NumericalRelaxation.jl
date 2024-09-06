@@ -217,7 +217,7 @@ as points of interest as well (only if step size at this point is greater than
 """
 function adaptive_1Dgrid!(ac::AdaptiveGrahamScan, ac_buffer::AdaptiveConvexificationBuffer1D{T1,T2,T3}) where {T1,T2,T3}
     Fₕₑₛ = check_hessian(ac, ac_buffer)
-    Fₛₗₚ = check_slope(ac_buffer)
+    Fₛₗₚ,lim_reached = check_slope(ac_buffer)
     F⁺⁻ = combine(Fₛₗₚ, Fₕₑₛ)
     discretize_interval(ac_buffer.adaptivebuffer.grid, F⁺⁻, ac)
     return F⁺⁻
@@ -243,120 +243,89 @@ function check_slope(ac_buffer::AdaptiveConvexificationBuffer1D)
 end
 
 function check_slope(F::Vector{T2}, W::Vector{T1}) where {T2,T1}
+    # if lower limit of intervall is part of convex hull, algorithm stops regardless of current state of convexification. result is likely to still contain non-convex parts.
     mask = ones(Bool,length(F))
-    i = 1   # linker Iterator
-    k = 2   # rechter Iterator
-    r = iterator(k, mask; dir=1) # r = 3
-    flag_l = false
-    flag_r = false
-    while r < length(W)
-        r = iterator(k, mask; dir=1) # temp iterator
-        if ~is_convex((F[i],W[i]), (F[k],W[k]), (F[r],W[r]))
-            int_konvex_l = true
-            int_konvex_r = false
-            while ~(int_konvex_l && int_konvex_r)
-                r = iterator(k, mask; dir=1)
-                #k nach rechts bis rechte Seite konvex
-                if r < length(W)    #falls rand des Intervalls erreicht....
-                    r = iterator(k, mask; dir=1)
-                    while ~is_convex((F[i],W[i]), (F[k],W[k]), (F[r],W[r]))
-                        mask[k] = 0
-                        if r == length(W)
-                            flag_r = true
+    l = 1   # links
+    m = 2   # mitte
+    r = 3 # rechts
+    dir = 1 # positive search direction
+    lim_reached = false
+    while r<length(W) || ~is_convex((F[l],W[l]), (F[m],W[m]), (F[r],W[r]))
+        if ~is_convex((F[l],W[l]), (F[m],W[m]), (F[r],W[r]))
+            convex = false
+            while ~(convex)
+                convex=true
+                if ~is_convex((F[l],W[l]), (F[m],W[m]), (F[r],W[r]))
+                    convex = false
+                    while ~is_convex((F[l],W[l]), (F[m],W[m]), (F[r],W[r]))
+                        mask[m]=0
+                        if (m==length(W)-1) || (m==2)
+                            lim_reached=true
                             break
                         end
-                        k = iterator(k, mask; dir=1)
-                        r = iterator(k, mask; dir=1)
-                        int_konvex_l = false
+                        m = iterator(m, mask; dir=dir)
+                        dir==1 ? r=iterator(m, mask; dir=1) : l=iterator(m, mask; dir=-1)
                     end
-                elseif ~flag_r      #....Warnung ausgeben
-                    mask[k] = 0
-                    k = iterator(k, mask; dir=1)
-                    flag_r = true
+                    lim_reached ? break : nothing
+                    dir *= -1 # switch search dir.
+                    m = iterator(m, mask; dir=dir)
+                    l=iterator(m, mask; dir=-1)
+                    r=iterator(m, mask; dir=1)
                 end
-                int_konvex_r = true
-                #i nach links bis linke Seite konvex
-                if i > 1    #falls rand des Intervalls erreicht....
-                    l = iterator(i, mask; dir=-1)
-                    while ~is_convex((F[l],W[l]), (F[i],W[i]), (F[k],W[k]))
-                        mask[i] = 0
-                        if l == 1
-                            flag_l = true
-                            break
-                        end
-                        i = iterator(i, mask; dir=-1)
-                        l = iterator(i, mask; dir=-1)
-                        int_konvex_r = false
-                    end
-                elseif ~flag_l      #....Warnung ausgeben
-                    flag_l = true
-                end
-                int_konvex_l = true
             end
+            lim_reached ? break : nothing
+            dir=1
         else
-            i = iterator(i, mask; dir=1)
-            k = iterator(k, mask; dir=1)
+            m = iterator(m, mask; dir=1)
+            l = iterator(m, mask; dir=-1)
+            r = iterator(m, mask; dir=1)
         end
     end
-
     F_info = zeros(typeof(F[1]),1)
     F_info[1] = F[1]
-    #if flag_l
-    #    @info("linker Rand in nicht konveFem Bereich")
-    #end
-
-    for i in 1:length(F)-1
-        if (mask[i]==0) && (mask[i+1]==1)
-            push!(F_info,F[i+1])
-        elseif (mask[i]==1) && (mask[i+1]==0)
-            push!(F_info,F[i])
-        end
+    for i in 2:length(F)-1
+        (mask[i-1]==0) && (mask[i]==1) ? push!(F_info,F[i]) : nothing
+        (mask[i]==1) && (mask[i+1]==0) ? push!(F_info,F[i]) : nothing
     end
-    #if flag_r
-    #    @info("rechter Rand in nicht konvexem Bereich")
-    #end
     push!(F_info,F[end])
-    return F_info
+    return F_info, lim_reached
 end
 
-function combine(X_slp::Array{T}, X_hes::Array{T},d=0.4::AbstractFloat) where {T}
-    # X_HEssian --> aus ∂²W∂x² extrahierte Minima.
-    # X_Slope --> aus den Funktionswerten herausgefiltertete Start- und Endpunkte nicht konv. Bereiche 
-    #=d       --> relative Distanz zwischen Minima in X_Hessian und nächstem/vorherigem Punkt an dem 
-                  Intervallgrenze gesetzt werden soll =#
-    X_Slp = copy(X_slp)
-    X_Hes = copy(X_hes)
-    for i in 1:length(X_Hes)
-        X_Hes[i]>X_Slp[1] && X_Hes[i]<X_Slp[end] ? nothing : error("X_Hes[$i]=$(X_Hes[i][1]) not within interval [$(X_Slp[1][1]), $(X_Slp[end][1])]")
+function combine(Fₛₗₚ::Array{T}, Fₕₑₛ::Array{T},d=0.4::AbstractFloat) where {T}
+    #d: relative Distanz zwischen Minima in F_hessian und nächstem/vorherigem Punkt an dem Intervallgrenze gesetzt werden soll
+    F_slp = copy(Fₛₗₚ)
+    F_hes = copy(Fₕₑₛ)
+    for i in 1:length(F_hes)
+        F_hes[i]>F_slp[1] && F_hes[i]<F_slp[end] ? nothing : error("F_hes[$i]=$(F_hes[i][1]) not within interval [$(F_slp[1][1]), $(F_slp[end][1])]")
     end
     if d>0.4999
         d = 0.4999
     end
-    if ~isempty(X_Hes)
-        X_mtrx_1 = ones(T,length(X_Slp)+length(X_Hes))
-        X_mtrx_2 = ones(Int64,length(X_Slp)+length(X_Hes))
-        j = 1; # Iterator für X_Slp
-        k = 1; # Iterator für X_Hes
+    if ~isempty(F_hes)
+        X_mtrx_1 = ones(T,length(F_slp)+length(F_hes))
+        X_mtrx_2 = ones(Int64,length(F_slp)+length(F_hes))
+        j = 1; # Iterator für F_slp
+        k = 1; # Iterator für F_hes
 
-        push!(X_Hes,X_Slp[end]+one(T))  # damit Schleife auf Index [end+1] zugreifen kann
+        push!(F_hes,F_slp[end]+one(T))  # damit Schleife auf Index [end+1] zugreifen kann
 
          # Konstruktionsmatrix erzeugen
             #= z.B.
             [X_mtrx_1 ^T =   [0.001 0.501 0.701 1.001 1.201 2.901 5.001;
              X_mtrx_2]        1     2     1     0     1     1     1     ]
             -> 1. Zeile: koordinaten relevanter Punkte (Minimum Hesse oder Start/Ende konvexer Berch)
-            -> 2. Zeile: 1 -> aus X_Slp; 2/0 -> aus X_Hes;  =#
+            -> 2. Zeile: 1 -> aus F_slp; 2/0 -> aus F_hes;  =#
 
         for i in 1:length(X_mtrx_1)
-            if X_Slp[j][1] > X_Hes[k][1]
-                X_mtrx_1[i] = X_Hes[k]
-                X_mtrx_2[i] = iseven(j) ? 2 : 0 # Marker -> X_Hes in konvx Bereich (0) sonst (2)
+            if F_slp[j][1] > F_hes[k][1]
+                X_mtrx_1[i] = F_hes[k]
+                X_mtrx_2[i] = iseven(j) ? 2 : 0 # Marker -> F_hes in konvx Bereich (0) sonst (2)
                 k += 1
-            elseif X_Slp[j][1] < X_Hes[k][1]
-                X_mtrx_1[i] = X_Slp[j]
+            elseif F_slp[j][1] < F_hes[k][1]
+                X_mtrx_1[i] = F_slp[j]
                 j += 1
             else
-                X_mtrx_1[i] = X_Hes[k]
+                X_mtrx_1[i] = F_hes[k]
                 X_mtrx_2[i] = 0
                 k+=1
             end
@@ -377,7 +346,7 @@ function combine(X_slp::Array{T}, X_hes::Array{T},d=0.4::AbstractFloat) where {T
 
         return unique(X_res)
     else
-        return unique(X_Slp)
+        return unique(F_slp)
     end
 end
 
