@@ -87,6 +87,9 @@ Base.@kwdef struct AdaptiveGrahamScan <: AbstractConvexification
     radius::Float64 = 3                       # nur relevant für: distribution = "fix"
     minStepSize::Float64 = 0.03
     forceAdaptivity::Bool = false
+    d_hes::Number=0.4                         # distance 
+#    AdaptiveGrahamScan(int, bg, np, exp, dis, ighes, mpi, rad, stp, frce, d_hes) = d_hes>=0.5 ? error("assigned value too large d=$(d)>=0.5") : new(int, bg, np, exp, dis, ighes, mpi, rad, stp, frce, d_hes)
+#    end
 end
 
 δ(s::AdaptiveGrahamScan) = step(range(s.interval[1],s.interval[2],length=s.adaptivegrid_numpoints))
@@ -218,7 +221,7 @@ as points of interest as well (only if step size at this point is greater than
 function adaptive_1Dgrid!(ac::AdaptiveGrahamScan, ac_buffer::AdaptiveConvexificationBuffer1D{T1,T2,T3}) where {T1,T2,T3}
     Fₕₑₛ = check_hessian(ac, ac_buffer)
     Fₛₗₚ,lim_reached = check_slope(ac_buffer)
-    F⁺⁻ = combine(Fₛₗₚ, Fₕₑₛ)
+    F⁺⁻ = combine(Fₛₗₚ, Fₕₑₛ, ac)
     discretize_interval(ac_buffer.adaptivebuffer.grid, F⁺⁻, ac)
     return F⁺⁻
 end
@@ -289,16 +292,30 @@ function check_slope(F::Vector{T2}, W::Vector{T1}) where {T2,T1}
     return F_info, lim_reached
 end
 
-function combine(Fₛₗₚ::Array{T}, Fₕₑₛ::Array{T},d=0.4::AbstractFloat) where {T}
+function _pos_relative_to_interval(F::T, F_int::Tuple{T,T}) where {T}
+    return F[1]>=F_int[1][1] && F[1]<=F_int[2][1] ? 2 : (F[1]<F_int[1][1] ? 1 : 3)
+end
+
+function combine(Fₛₗₚ::Array{Tuple{T,T}}, Fₕₑₛ::Array{T}, ac::AdaptiveGrahamScan) where {T}
     #d: relative Distanz zwischen Minima in F_hessian und nächstem/vorherigem Punkt an dem Intervallgrenze gesetzt werden soll
     F_slp = copy(Fₛₗₚ)
     F_hes = copy(Fₕₑₛ)
+
+    # determine length of output vector
+    len_info= 2+2*length(F_slp)+2*length(F_hes)
     for i in 1:length(F_hes)
-        F_hes[i]>F_slp[1] && F_hes[i]<F_slp[end] ? nothing : error("F_hes[$i]=$(F_hes[i][1]) not within interval [$(F_slp[1][1]), $(F_slp[end][1])]")
+        for j in 1:length(F_slp)
+            if F_hes[i][1]>=F_slp[j][1][1] && F_hes[i][1]<=F_slp[j][2][1]
+                len_info-=2
+                break
+            end
+        end
     end
-    if d>0.4999
-        d = 0.4999
-    end
+    F_info = zeros(T,len_info)
+    F_info[1] = Tensors.Tensor{2,1}((ac.interval[1],))
+
+    # fill_F_info
+    
     if ~isempty(F_hes)
         X_mtrx_1 = ones(T,length(F_slp)+length(F_hes))
         X_mtrx_2 = ones(Int64,length(F_slp)+length(F_hes))
@@ -343,9 +360,8 @@ function combine(Fₛₗₚ::Array{T}, Fₕₑₛ::Array{T},d=0.4::AbstractFloat
         end
 
         return unique(X_res)
-    else
-        return unique(F_slp)
     end
+    F_info[end] = Tensors.Tensor{2,1}((ac.interval[2]))
 end
 
 function discretize_interval(Fₒᵤₜ::Array{T}, F⁺⁻::Array{T}, ac::AdaptiveGrahamScan) where {T}
