@@ -292,30 +292,17 @@ function check_slope(F::Vector{T2}, W::Vector{T1}) where {T2,T1}
     return F_info, lim_reached
 end
 
-function _pos_relative_to_interval(F::T, F_int::Tuple{T,T}) where {T}
-    return F[1]>=F_int[1][1] && F[1]<=F_int[2][1] ? 2 : (F[1]<F_int[1][1] ? 1 : 3)
-end
-
 function combine(Fₛₗₚ::Array{Tuple{T,T}}, Fₕₑₛ::Array{T}, ac::AdaptiveGrahamScan) where {T}
-    #d: relative Distanz zwischen Minima in F_hessian und nächstem/vorherigem Punkt an dem Intervallgrenze gesetzt werden soll
-    F_slp = copy(Fₛₗₚ)
+    # convert new interface to old one
+    F_slp = zeros(T,length(Fₛₗₚ)*2+2)
+    F_slp[1] = Tensor{2,1}((ac.interval[1],))
+    for i in 1:length(Fₛₗₚ)
+        k = 2 + (i-1)*2
+        F_slp[k:k+1] .= Fₛₗₚ[i]
+    end
+    F_slp[end] = Tensor{2,1}((ac.interval[2],))
     F_hes = copy(Fₕₑₛ)
 
-    # determine length of output vector
-    len_info= 2+2*length(F_slp)+2*length(F_hes)
-    for i in 1:length(F_hes)
-        for j in 1:length(F_slp)
-            if F_hes[i][1]>=F_slp[j][1][1] && F_hes[i][1]<=F_slp[j][2][1]
-                len_info-=2
-                break
-            end
-        end
-    end
-    F_info = zeros(T,len_info)
-    F_info[1] = Tensors.Tensor{2,1}((ac.interval[1],))
-
-    # fill_F_info
-    
     if ~isempty(F_hes)
         X_mtrx_1 = ones(T,length(F_slp)+length(F_hes))
         X_mtrx_2 = ones(Int64,length(F_slp)+length(F_hes))
@@ -353,15 +340,16 @@ function combine(Fₛₗₚ::Array{Tuple{T,T}}, Fₕₑₛ::Array{T}, ac::Adapti
                 X_res[j] = X_mtrx_1[i]
                 j += 1
             elseif X_mtrx_2[i] == 2
-                X_res[j] = X_mtrx_1[i] - d*(X_mtrx_1[i]-X_mtrx_1[i-1])
-                X_res[j+1] = X_mtrx_1[i] + d*(X_mtrx_1[i+1]-X_mtrx_1[i])
+                X_res[j] = X_mtrx_1[i] - ac.d_hes*(X_mtrx_1[i]-X_mtrx_1[i-1])
+                X_res[j+1] = X_mtrx_1[i] + ac.d_hes*(X_mtrx_1[i+1]-X_mtrx_1[i])
                 j += 2
             end
         end
 
         return unique(X_res)
+    else
+        return unique(F_slp)
     end
-    F_info[end] = Tensors.Tensor{2,1}((ac.interval[2]))
 end
 
 function discretize_interval(Fₒᵤₜ::Array{T}, F⁺⁻::Array{T}, ac::AdaptiveGrahamScan) where {T}
