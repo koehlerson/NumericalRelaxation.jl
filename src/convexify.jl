@@ -292,7 +292,7 @@ function check_slope(F::Vector{T2}, W::Vector{T1}) where {T2,T1}
     return F_info, lim_reached
 end
 
-function _pos_relative_to_interval(F::T, F_int::Tuple{T,T}) where {T}
+function _get_rel_pos(F::T, F_int::Tuple{T,T}) where {T}
     return F[1]>=F_int[1][1] && F[1]<=F_int[2][1] ? 2 : (F[1]<F_int[1][1] ? 1 : 3)
 end
 
@@ -303,23 +303,21 @@ function combine(Fₛₗₚ::Array{Tuple{T,T}}, Fₕₑₛ::Array{T}, ac::Adapti
 
     # count number of hes vals to ignore
     cnt = 0
-    for i in 1:length(F_hes), j in 1:length(F_slp)
-        _pos_relative_to_interval(F_hes[i],F_slp[j])==2 ? cnt+=1 : nothing
-    end
+    for i in 1:length(F_hes) for j in 1:length(F_slp)
+        _get_rel_pos(F_hes[i],F_slp[j])==2 ? begin cnt+=1; break end : nothing
+    end end
 
     # initialize F_info vector
-    F_i = typeof(F_slp)(undef,length(F_slp)-2+length(F_hes)-cnt)
+    F_i = typeof(F_slp)(undef,length(F_slp)+length(F_hes)-cnt)
 
     # fill f_info
     iᵢₙ = 1
-    for iₛₗₚ in 1:length(F_slp)-1
-        iₛₗₚ>1 ? F_i[iᵢₙ]=F_slp[iₛₗₚ] : nothing
-        iₛₗₚ>1 ? iᵢₙ += 1 : nothing
+    for iₛₗₚ in 1:length(F_slp)
+        F_i[iᵢₙ]=F_slp[iₛₗₚ]
+        iₛₗₚ==length(F_slp) ? break : iᵢₙ += 1
         for iₕₑₛ in 1:length(F_hes)
-            if _pos_relative_to_interval(F_hes[iₕₑₛ],F_slp[iₛₗₚ])==3 && _pos_relative_to_interval(F_hes[iₕₑₛ],F_slp[iₛₗₚ+1])==1
-                F_i[iᵢₙ] = (F_hes[iₕₑₛ],F_hes[iₕₑₛ])
-                iᵢₙ+=1
-            end
+            _get_rel_pos(F_hes[iₕₑₛ],F_slp[iₛₗₚ])==3 && _get_rel_pos(F_hes[iₕₑₛ],F_slp[iₛₗₚ+1])==1 ?
+                                                    begin F_i[iᵢₙ] = (F_hes[iₕₑₛ],F_hes[iₕₑₛ]); iᵢₙ+=1 end : nothing
         end
     end
 
@@ -327,22 +325,16 @@ function combine(Fₛₗₚ::Array{Tuple{T,T}}, Fₕₑₛ::Array{T}, ac::Adapti
     offs = zero(T)
     for k in 1:length(F_i)
         if F_i[k][1] == F_i[k][2]
-            if k<length(F_i) && F_i[k+1][1] == F_i[k+1][2]
-                off_new = (1-ac.d_hes)*(F_i[k+1][1]-F_i[k][2])/2
-                F_i[k] = (k==1 ? F_i[k][1]-ac.d_hes*(F_i[k][1]-Tensor{2,1}((ac.interval[1],))) :
-                                 F_i[k][1]-ac.d_hes*(F_i[k][1]-F_i[k-1][2]+offs),
-                          F_i[k][2]+ac.d_hes*(F_i[k+1][1]-F_i[k][2])/2)
-                offs = off_new
+            if F_i[k+1][1] == F_i[k+1][2]
+                F_i[k],offs =
+                        ((F_i[k][1]-ac.d_hes*(F_i[k][1]-F_i[k-1][2]+offs), F_i[k][2]+ac.d_hes*(F_i[k+1][1]-F_i[k][2])/2), (1-ac.d_hes)*(F_i[k+1][1]-F_i[k][2])/2)
             else
-                F_i[k] = (k==1 ? F_i[k][1]-ac.d_hes*(F_i[k][1]-Tensor{2,1}((ac.interval[1],))) :
-                                 F_i[k][1]-ac.d_hes*(F_i[k][1]-F_i[k-1][2]-offs),
-                          k==length(F_i) ? F_i[k][2]+ac.d_hes*(Tensor{2,1}((ac.interval[2],))-F_i[k][2]) :
-                                 F_i[k][2]+ac.d_hes*(F_i[k+1][1]-F_i[k][2]))
-                offs=zero(T)
+                F_i[k],offs =
+                        ((F_i[k][1]-ac.d_hes*(F_i[k][1]-F_i[k-1][2]-offs), F_i[k][2]+ac.d_hes*(F_i[k+1][1]-F_i[k][2])), zero(T))
             end
         end
     end
-    return vcat([T((ac.interval[1],))],collect.(F_i)...,[T((ac.interval[2],))])
+    return unique(vcat(collect.(F_i)...)[2:end-1])
 end
 
 function discretize_interval(Fₒᵤₜ::Array{T}, F⁺⁻::Array{T}, ac::AdaptiveGrahamScan) where {T}
