@@ -298,70 +298,51 @@ end
 
 function combine(Fₛₗₚ::Array{Tuple{T,T}}, Fₕₑₛ::Array{T}, ac::AdaptiveGrahamScan) where {T}
     #d: relative Distanz zwischen Minima in F_hessian und nächstem/vorherigem Punkt an dem Intervallgrenze gesetzt werden soll
-    F_slp = copy(Fₛₗₚ)
+    F_slp = vcat((T((-Inf,)),T((ac.interval[1],))), copy(Fₛₗₚ), (T((ac.interval[2],)),T((Inf,))))
     F_hes = copy(Fₕₑₛ)
 
-    # determine length of output vector
-    len_info= 2+2*length(F_slp)+2*length(F_hes)
-    for i in 1:length(F_hes)
-        for j in 1:length(F_slp)
-            if F_hes[i][1]>=F_slp[j][1][1] && F_hes[i][1]<=F_slp[j][2][1]
-                len_info-=2
-                break
+    # count number of hes vals to ignore
+    cnt = 0
+    for i in 1:length(F_hes), j in 1:length(F_slp)
+        _pos_relative_to_interval(F_hes[i],F_slp[j])==2 ? cnt+=1 : nothing
+    end
+
+    # initialize F_info vector
+    F_i = typeof(F_slp)(undef,length(F_slp)-2+length(F_hes)-cnt)
+
+    # fill f_info
+    iᵢₙ = 1
+    for iₛₗₚ in 1:length(F_slp)-1
+        iₛₗₚ>1 ? F_i[iᵢₙ]=F_slp[iₛₗₚ] : nothing
+        iₛₗₚ>1 ? iᵢₙ += 1 : nothing
+        for iₕₑₛ in 1:length(F_hes)
+            if _pos_relative_to_interval(F_hes[iₕₑₛ],F_slp[iₛₗₚ])==3 && _pos_relative_to_interval(F_hes[iₕₑₛ],F_slp[iₛₗₚ+1])==1
+                F_i[iᵢₙ] = (F_hes[iₕₑₛ],F_hes[iₕₑₛ])
+                iᵢₙ+=1
             end
         end
     end
-    F_info = zeros(T,len_info)
-    F_info[1] = Tensors.Tensor{2,1}((ac.interval[1],))
 
-    # fill_F_info
-    
-    if ~isempty(F_hes)
-        X_mtrx_1 = ones(T,length(F_slp)+length(F_hes))
-        X_mtrx_2 = ones(Int64,length(F_slp)+length(F_hes))
-        j = 1; # Iterator für F_slp
-        k = 1; # Iterator für F_hes
-
-        push!(F_hes,F_slp[end]+one(T))  # damit Schleife auf Index [end+1] zugreifen kann
-
-         # Konstruktionsmatrix erzeugen
-            #= z.B.
-            [X_mtrx_1 ^T =   [0.001 0.501 0.701 1.001 1.201 2.901 5.001;
-             X_mtrx_2]        1     2     1     0     1     1     1     ]
-            -> 1. Zeile: koordinaten relevanter Punkte (Minimum Hesse oder Start/Ende konvexer Berch)
-            -> 2. Zeile: 1 -> aus F_slp; 2/0 -> aus F_hes;  =#
-
-        for i in 1:length(X_mtrx_1)
-            if F_slp[j][1] > F_hes[k][1]
-                X_mtrx_1[i] = F_hes[k]
-                X_mtrx_2[i] = iseven(j) ? 2 : 0 # Marker -> F_hes in konvx Bereich (0) sonst (2)
-                k += 1
-            elseif F_slp[j][1] < F_hes[k][1]
-                X_mtrx_1[i] = F_slp[j]
-                j += 1
+    # resolve F_hes entries in F_i
+    offs = zero(T)
+    for k in 1:length(F_i)
+        if F_i[k][1] == F_i[k][2]
+            if k<length(F_i) && F_i[k+1][1] == F_i[k+1][2]
+                off_new = (1-ac.d_hes)*(F_i[k+1][1]-F_i[k][2])/2
+                F_i[k] = (k==1 ? F_i[k][1]-ac.d_hes*(F_i[k][1]-Tensor{2,1}((ac.interval[1],))) :
+                                 F_i[k][1]-ac.d_hes*(F_i[k][1]-F_i[k-1][2]+offs),
+                          F_i[k][2]+ac.d_hes*(F_i[k+1][1]-F_i[k][2])/2)
+                offs = off_new
             else
-                X_mtrx_1[i] = F_hes[k]
-                X_mtrx_2[i] = 0
-                k+=1
+                F_i[k] = (k==1 ? F_i[k][1]-ac.d_hes*(F_i[k][1]-Tensor{2,1}((ac.interval[1],))) :
+                                 F_i[k][1]-ac.d_hes*(F_i[k][1]-F_i[k-1][2]-offs),
+                          k==length(F_i) ? F_i[k][2]+ac.d_hes*(Tensor{2,1}((ac.interval[2],))-F_i[k][2]) :
+                                 F_i[k][2]+ac.d_hes*(F_i[k+1][1]-F_i[k][2]))
+                offs=zero(T)
             end
         end
-        # X_res aus Konstruktionsmatrix zusammensetzen
-        X_res = zeros(T,Int(sum(X_mtrx_2[1:end])))
-        j = 1
-        for i in 1:length(X_mtrx_1)
-            if X_mtrx_2[i] == 1
-                X_res[j] = X_mtrx_1[i]
-                j += 1
-            elseif X_mtrx_2[i] == 2
-                X_res[j] = X_mtrx_1[i] - d*(X_mtrx_1[i]-X_mtrx_1[i-1])
-                X_res[j+1] = X_mtrx_1[i] + d*(X_mtrx_1[i+1]-X_mtrx_1[i])
-                j += 2
-            end
-        end
-
-        return unique(X_res)
     end
-    F_info[end] = Tensors.Tensor{2,1}((ac.interval[2]))
+    return vcat([T((ac.interval[1],))],collect.(F_i)...,[T((ac.interval[2],))])
 end
 
 function discretize_interval(Fₒᵤₜ::Array{T}, F⁺⁻::Array{T}, ac::AdaptiveGrahamScan) where {T}
