@@ -185,7 +185,8 @@ end
             minPointsPerInterval=15,
             radius=3,
             minStepSize=0.03,
-            forceAdaptivity=false)
+            forceAdaptivity=false,
+            d_hes=0.4)
     @testset "build_buffer()" begin
         buf = @inferred NumericalRelaxation.build_buffer(ac)
         @test typeof(buf) == (NumericalRelaxation.AdaptiveConvexificationBuffer1D{Tensor{2,1,Float64,1},Float64,Tensor{4,1,Float64,1}})
@@ -210,6 +211,31 @@ end
         @test isapprox(F⁺[1],4.0,atol=1e-1)
         @test isapprox(F⁻[1],1.0,atol=1e-1)
         @test @inferred(convexify(ac,buffer,W,Tensor{2,1}((2.0,)))) == (W_conv,F⁺,F⁻)
+    end
+    @testset "combine()" begin
+        F_slp = [[(Tensor{2,1}((x[1],)), Tensor{2,1}((x[2],))) for x in slp]
+                                    for slp in [[(0.001, 1.0), (3.0, 5.0)], [(0.001, 5.0)], [(2.0, 3.0), (4.0, 5.0)]]]
+        push!(F_slp,Vector{Tuple{Tensor{2,1},Tensor{2,1}}}())
+        F_hes = [[Tensor{2,1}((x,)) for x in hes]
+                                    for hes in [[0.001], [5.0], [0.001,5.0], [2.,3.,4.,5.], collect(0.1:0.9:4.5)]]
+        push!(F_hes, Vector{Tensor{2,1}}())
+        solution = [(0.001, 1., 3., 5.)                         (0.001, 5.) (0.001, 2., 3., 4., 5.) (0.001, 5.)
+                    (0.001, 1., 3., 5.)                         (0.001, 5.) (0.001, 2., 3., 4., 5.) (0.001, 5.)
+                    (0.001, 1., 3., 5.)                         (0.001, 5.) (0.001, 2., 3., 4., 5.) (0.001, 5.)
+                    (0.001, 1., 1.6, 2.4, 3.0, 5.)              (0.001, 5.) (0.001, 2., 3., 4., 5.) (0.001, 1.2004, 2.2, 2.56, 3.2, 3.8, 4.4, 5.)
+                    (0.001, 1., 1.54, 2.08, 2.62, 2.88, 3., 5.) (0.001, 5.) (0.001, 0.0604, 0.28, 0.604, 1.18, 1.72, 1.94, 2., 3., 3.42, 3.8200000000000003, 4., 5.) (0.001, 0.0604, 0.28, 0.604, 1.18, 1.504, 2.08, 2.404, 2.98, 3.52, 4.22, 5.)
+                    (0.001, 1., 3., 5.)                         (0.001, 5.) (0.001, 2., 3., 4., 5.) (0.001, 5.)]
+
+        for iₛₗₚ in 1:length(F_slp), iₕₑₛ in 1:length(F_hes)
+            @test NumericalRelaxation.combine(F_slp[iₛₗₚ],F_hes[iₕₑₛ],ac)==[Tensor{2,1}((x,)) for x in solution[iₕₑₛ,iₛₗₚ]]
+            print("F_slp[$(iₛₗₚ)]")
+            display(F_slp[iₛₗₚ])
+            print("F_hes[$(iₕₑₛ)]")
+            display(F_hes[iₕₑₛ])
+            print("iₛₗₚ=$(iₛₗₚ), iₕₑₛ=$(iₕₑₛ), solution= ")
+            display(NumericalRelaxation.combine(F_slp[iₛₗₚ],F_hes[iₕₑₛ],ac))
+println("======================================================================")
+        end
     end
 end
 
