@@ -156,6 +156,22 @@ function convexify_nondeleting!(F, W)
     return n
 end
 
+@doc raw"""
+    convexify_nonediting!(F, W, mask::Vector{Bool})
+Kernel function that implements the actual convexification without editing F and W in $\mathcal{O}(N)$.
+"""
+function convexify_nonediting!(F, W, mask::Vector{Bool})
+    for i in 3:length(F)
+        n = iterator(i,mask;dir=-1)
+        println("i=$(i), n=$(n), $(~is_convex((F[n-1], W[n-1]),(F[n], W[n]),(F[i], W[i])))")
+        while n >=2 && ~is_convex((F[iterator(n,mask;dir=-1)], W[iterator(n,mask;dir=-1)]),(F[n], W[n]),(F[i], W[i]))
+            mask[n]=0
+            n = iterator(i,mask;dir=-1)
+            println("n=$(n)")
+        end
+    end
+end
+
 ####################################################
 ####################################################
 ##########  Adaptive 1D utility functions ##########
