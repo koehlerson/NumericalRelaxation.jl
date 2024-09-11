@@ -327,7 +327,7 @@ function combine(Fₛₗₚ::Array{Tuple{T,T}}, Fₕₑₛ::Array{T}, ac::Adapti
         if F_i[k][1] == F_i[k][2]
             if F_i[k+1][1] == F_i[k+1][2]
                 F_i[k],offs =
-                        ((F_i[k][1]-ac.d_hes*(F_i[k][1]-F_i[k-1][2]+offs), F_i[k][2]+ac.d_hes*(F_i[k+1][1]-F_i[k][2])/2), (1-ac.d_hes)*(F_i[k+1][1]-F_i[k][2])/2)
+                        ((F_i[k][1]-ac.d_hes*(F_i[k][1]-(F_i[k-1][2]+offs)), F_i[k][2]+ac.d_hes*(F_i[k+1][1]-F_i[k][2])/2), (1-ac.d_hes)*(F_i[k+1][1]-F_i[k][2])/2)
             else
                 F_i[k],offs =
                         ((F_i[k][1]-ac.d_hes*(F_i[k][1]-F_i[k-1][2]-offs), F_i[k][2]+ac.d_hes*(F_i[k+1][1]-F_i[k][2])), zero(T))
