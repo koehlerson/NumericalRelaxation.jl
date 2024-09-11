@@ -181,7 +181,7 @@ end
             basegrid_numpoints=50,
             adaptivegrid_numpoints=115,
             exponent=5,
-            distribution="fix",
+            distribution="fix_neu",
             stepSizeIgnoreHessian=0.05,
             minPointsPerInterval=15,
             radius=3,
