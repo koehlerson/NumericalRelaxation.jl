@@ -199,7 +199,7 @@ struct Polynomial{T1<:Union{Float64,Tensors.Tensor{2,1}}}
             e = one(T)* 0.0
             n = 0.0
             rad = copy(ac.radius)
-        elseif ac.distribution == "fix"
+        elseif ac.distribution == "fix" || (ac.distribution == "fix_neu")
             rad =  ac.radius<ΔF[1]/2 ? ac.radius/1 : ΔF[1]/2
             c = F
             b = one(T)* ac.minStepSize
@@ -444,12 +444,43 @@ function distribute_gridpoints!(vecₒᵤₜ::Array, F_info::Array, ac::Adaptive
 
     elseif ac.distribution == "fix_neu"
 println("---------------------------enter new teritory-----------------------------__")
-        remaining_points = ac.adaptivegrid_numpoints
+display(F_info)
+#        ppi = ac.adaptivegrid_numpoints/(length(F_info)-1)
+        int = [F_info[i+1][1]-F_info[i][1] for i in 1:length(F_info)-1]
+display(int)
+        p = sortperm(int)
+        for (i,ip) in enumerate(p)
+            avgPoints =(ac.adaptivegrid_numpoints-sum(gridpoints_oninterval))/(length(F_info)-i)
+println(avgPoints)
+            minPoints = (int[ip])/ac.minStepSize
+println(minPoints)
+            if avgPoints > minPoints
+                gridpoints_oninterval[ip] = Int(floor((int[ip])/ac.minStepSize))
+display(gridpoints_oninterval)
+            else
+                break
+            end
+        end
+
+remaining_points = ac.adaptivegrid_numpoints-sum(gridpoints_oninterval)
+println("rempnts = $(remaining_points)")
+        activeint = iszero.(gridpoints_oninterval)
+        nactive = sum(activeint)
+
+        for (i,ip) in enumerate(sortperm(int.*activeint,rev=true))
+#enumerate(iszero.(gridpoints_oninterval))
+            if activeint[ip]
+                addpoint = i<=remaining_points%nactive ? 1 : 0
+                gridpoints_oninterval[ip] = floor(remaining_points/nactive) + addpoint
+            end
+        end
+display(sum(gridpoints_oninterval))
+#=        remaining_points = ac.adaptivegrid_numpoints
         for i in 1:length(F_info)-1
             if ac.minStepSize*(ac.adaptivegrid_numpoints/(length(F_info)-1)) > (F_info[i+1][1]-F_info[i][1])
                 gridpoints_oninterval[i] = Int(floor((F_info[i+1][1]-F_info[i][1])/ac.minStepSize))
             end
-        end
+        end =#
 println(gridpoints_oninterval)
         vecₒᵤₜ .= gridpoints_oninterval
 println("---------------------------leaving new teritory-----------------------------__")
