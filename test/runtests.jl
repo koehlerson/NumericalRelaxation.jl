@@ -179,7 +179,7 @@ end
     ac = AdaptiveGrahamScan(
             interval=[0.001,5.0],
             basegrid_numpoints=50,
-            adaptivegrid_numpoints=120,
+            adaptivegrid_numpoints=115,
             exponent=5,
             distribution="fix",
             stepSizeIgnoreHessian=0.05,

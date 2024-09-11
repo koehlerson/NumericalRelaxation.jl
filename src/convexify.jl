@@ -235,6 +235,8 @@ function adaptive_1Dgrid!(ac::AdaptiveGrahamScan, ac_buffer::AdaptiveConvexifica
     Fₕₑₛ = check_hessian(ac, ac_buffer)
     Fₛₗₚ,lim_reached = check_slope(ac_buffer)
     Fᵢ = combine(Fₛₗₚ, Fₕₑₛ, ac)
+println("Fᵢ = ")
+display(Fᵢ)
     discretize_interval(ac_buffer.adaptivebuffer.grid, Fᵢ, ac)
     return Fᵢ
 end
@@ -324,6 +326,8 @@ function discretize_interval(Fₒᵤₜ::Array{T}, F_info::Array{T}, ac::Adaptiv
         gridpoints_oninterval = Array{Int64}(undef,numIntervals)
         distribute_gridpoints!(gridpoints_oninterval, F_info, ac)
 
+println("gridpoints_oninterval = ")
+display(gridpoints_oninterval)
         ∑gridpoints = sum(gridpoints_oninterval)
         ∑j = 0
         for i=1:numIntervals
@@ -347,15 +351,15 @@ function inv_m(mask::Array{T}) where {T}
     return ones(T,size(mask)) - mask
 end
 
-function distribute_gridpoints!(vecₒᵤₜ::Array, F_info⁺⁻::Array, ac::AdaptiveGrahamScan)
-    numIntervals = length(F_info⁺⁻)-1
-    gridpoints_oninterval = copy(vecₒᵤₜ)
+function distribute_gridpoints!(vecₒᵤₜ::Array, F_info::Array, ac::AdaptiveGrahamScan)
+    numIntervals = length(F_info)-1
+    gridpoints_oninterval = zeros(Int,length(vecₒᵤₜ))#copy(vecₒᵤₜ)
     if ac.distribution == "var"
         # ================================================================================
         # ================= Stuetzstellen auf Intervalle aufteilen =======================
         # ================================================================================
         for i=1:numIntervals
-            gridpoints_oninterval[i] = Int(round((F_info⁺⁻[i+1]-F_info⁺⁻[i])/(F_info⁺⁻[end]-F_info⁺⁻[1]) * (ac.adaptivegrid_numpoints-1)))
+            gridpoints_oninterval[i] = Int(round((F_info[i+1]-F_info[i])/(F_info[end]-F_info[1]) * (ac.adaptivegrid_numpoints-1)))
         end
         # ================================================================================
         # ======== korrektur --> um vorgegebene Anzahl an Gitterpunkten einzuhalten ======
@@ -400,7 +404,7 @@ function distribute_gridpoints!(vecₒᵤₜ::Array, F_info⁺⁻::Array, ac::Ad
                 -project(radPol, numGridpointsOnRadius/2-0.001)) / 0.002
             for i in 1:numIntervals
                 if mask_active[i] == 1
-                    linPartOfF = max((F_info⁺⁻[i+1][1]-F_info⁺⁻[i][1])-2*ac.radius,0)
+                    linPartOfF = max((F_info[i+1][1]-F_info[i][1])-2*ac.radius,0)
                     gridpoints_oninterval[i] =
                         Int(round( (ac.adaptivegrid_numpoints-1)/(activeIntervals) + linPartOfF/hₘₐₓ ))
                 end
@@ -415,7 +419,7 @@ function distribute_gridpoints!(vecₒᵤₜ::Array, F_info⁺⁻::Array, ac::Ad
             gridpoints_oninterval = Int.(round.(inv_m(mask_active).*gridpoints_oninterval +     norm_gridpoints_oninterval*active_points))
             # reduktion falls minimale Schrittweite*Stützpunkte > Intervallbreite
             for i in 1:length(gridpoints_oninterval)
-                maxnum = floor((F_info⁺⁻[i+1][1]-F_info⁺⁻[i][1])/ac.minStepSize)
+                maxnum = floor((F_info[i+1][1]-F_info[i][1])/ac.minStepSize)
                 if gridpoints_oninterval[i] > maxnum
                     gridpoints_oninterval[i] = maxnum
                     mask_active[i] = 0
@@ -436,6 +440,19 @@ function distribute_gridpoints!(vecₒᵤₜ::Array, F_info⁺⁻::Array, ac::Ad
         # Einträge übertragen
         vecₒᵤₜ .= gridpoints_oninterval
         return nothing
+
+
+    elseif ac.distribution == "fix_neu"
+println("---------------------------enter new teritory-----------------------------__")
+        remaining_points = ac.adaptivegrid_numpoints
+        for i in 1:length(F_info)-1
+            if ac.minStepSize*(ac.adaptivegrid_numpoints/(length(F_info)-1)) > (F_info[i+1][1]-F_info[i][1])
+                gridpoints_oninterval[i] = Int(floor((F_info[i+1][1]-F_info[i][1])/ac.minStepSize))
+            end
+        end
+println(gridpoints_oninterval)
+        vecₒᵤₜ .= gridpoints_oninterval
+println("---------------------------leaving new teritory-----------------------------__")
     end
 end
 
