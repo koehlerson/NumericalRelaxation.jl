@@ -156,6 +156,20 @@ function convexify_nondeleting!(F, W)
     return n
 end
 
+@doc raw"""
+    convexify_nonediting!(F, W, mask::Vector{Bool})
+Kernel function that implements the actual convexification without editing F and W in $\mathcal{O}(N)$.
+"""
+function convexify_nonediting!(F, W, mask::Vector{Bool})
+    for i in 3:length(F)
+        n = iterator(i,mask;dir=-1)
+        while n >=2 && ~is_convex((F[iterator(n,mask;dir=-1)], W[iterator(n,mask;dir=-1)]),(F[n], W[n]),(F[i], W[i]))
+            mask[n]=0
+            n = iterator(i,mask;dir=-1)
+        end
+    end
+end
+
 ####################################################
 ####################################################
 ##########  Adaptive 1D utility functions ##########
@@ -246,110 +260,63 @@ function check_slope(ac_buffer::AdaptiveConvexificationBuffer1D)
 end
 
 function check_slope(F::Vector{T2}, W::Vector{T1}) where {T2,T1}
-    # if lower limit of intervall is part of convex hull, algorithm stops regardless of current state of convexification. result is likely to still contain non-convex parts.
+    # determin convex hull
     mask = ones(Bool,length(F))
-    l = 1   # links
-    m = 2   # mitte
-    r = 3 # rechts
-    dir = 1 # positive search direction
-    lim_reached = false
-    while r<length(W) || ~is_convex((F[l],W[l]), (F[m],W[m]), (F[r],W[r]))
-        if ~is_convex((F[l],W[l]), (F[m],W[m]), (F[r],W[r]))
-            convex = false
-            while ~(convex)
-                convex=true
-                if ~is_convex((F[l],W[l]), (F[m],W[m]), (F[r],W[r]))
-                    convex = false
-                    while ~is_convex((F[l],W[l]), (F[m],W[m]), (F[r],W[r]))
-                        mask[m]=0
-                        if (m==length(W)-1) || (m==2)
-                            lim_reached=true
-                            break
-                        end
-                        m = iterator(m, mask; dir=dir)
-                        dir==1 ? r=iterator(m, mask; dir=1) : l=iterator(m, mask; dir=-1)
-                    end
-                    lim_reached ? break : nothing
-                    dir *= -1 # switch search dir.
-                    m = iterator(m, mask; dir=dir)
-                    l=iterator(m, mask; dir=-1)
-                    r=iterator(m, mask; dir=1)
-                end
-            end
-            lim_reached ? break : nothing
-            dir=1
-        else
-            m = iterator(m, mask; dir=1)
-            l = iterator(m, mask; dir=-1)
-            r = iterator(m, mask; dir=1)
-        end
-    end
+    convexify_nonediting!(F,W,mask)
+
+    # write non convex intervals into F_info
     F_info = Vector{Tuple{typeof(F[1]),typeof(F[1])}}()
     for i in 1:length(F)
         i>1 && (mask[i-1]==0) && (mask[i]==1) ? (F_info[end]=(F_info[end][1],F[i])) : nothing
         i<length(F) && (mask[i]==1) && (mask[i+1]==0) && push!(F_info,(F[i],zero(F[i])))
     end
-    return F_info, lim_reached
+
+    return F_info, mask[2]==0||mask[end-1]==0
+end
+
+function _get_rel_pos(F::T, F_int::Tuple{T,T}) where {T}
+    return F[1]>=F_int[1][1] && F[1]<=F_int[2][1] ? 2 : (F[1]<F_int[1][1] ? 1 : 3)
 end
 
 function combine(Fₛₗₚ::Array{Tuple{T,T}}, Fₕₑₛ::Array{T}, ac::AdaptiveGrahamScan) where {T}
-    # convert new interface to old one
-    F_slp = zeros(T,length(Fₛₗₚ)*2+2)
-    F_slp[1] = Tensor{2,1}((ac.interval[1],))
-    for i in 1:length(Fₛₗₚ)
-        k = 2 + (i-1)*2
-        F_slp[k:k+1] .= Fₛₗₚ[i]
-    end
-    F_slp[end] = Tensor{2,1}((ac.interval[2],))
+    #d: relative Distanz zwischen Minima in F_hessian und nächstem/vorherigem Punkt an dem Intervallgrenze gesetzt werden soll
+    F_slp = vcat((T((-Inf,)),T((ac.interval[1],))), copy(Fₛₗₚ), (T((ac.interval[2],)),T((Inf,))))
     F_hes = copy(Fₕₑₛ)
 
-    if ~isempty(F_hes)
-        X_mtrx_1 = ones(T,length(F_slp)+length(F_hes))
-        X_mtrx_2 = ones(Int64,length(F_slp)+length(F_hes))
-        j = 1; # Iterator für F_slp
-        k = 1; # Iterator für F_hes
+    # count number of hes vals to ignore
+    cnt = 0
+    for i in 1:length(F_hes) for j in 1:length(F_slp)
+        _get_rel_pos(F_hes[i],F_slp[j])==2 ? begin cnt+=1; break end : nothing
+    end end
 
-        push!(F_hes,F_slp[end]+one(T))  # damit Schleife auf Index [end+1] zugreifen kann
+    # initialize F_info vector
+    F_i = typeof(F_slp)(undef,length(F_slp)+length(F_hes)-cnt)
 
-         # Konstruktionsmatrix erzeugen
-            #= z.B.
-            [X_mtrx_1 ^T =   [0.001 0.501 0.701 1.001 1.201 2.901 5.001;
-             X_mtrx_2]        1     2     1     0     1     1     1     ]
-            -> 1. Zeile: koordinaten relevanter Punkte (Minimum Hesse oder Start/Ende konvexer Berch)
-            -> 2. Zeile: 1 -> aus F_slp; 2/0 -> aus F_hes;  =#
-
-        for i in 1:length(X_mtrx_1)
-            if F_slp[j][1] > F_hes[k][1]
-                X_mtrx_1[i] = F_hes[k]
-                X_mtrx_2[i] = iseven(j) ? 2 : 0 # Marker -> F_hes in konvx Bereich (0) sonst (2)
-                k += 1
-            elseif F_slp[j][1] < F_hes[k][1]
-                X_mtrx_1[i] = F_slp[j]
-                j += 1
-            else
-                X_mtrx_1[i] = F_hes[k]
-                X_mtrx_2[i] = 0
-                k+=1
-            end
+    # fill f_info
+    iᵢₙ = 1
+    for iₛₗₚ in 1:length(F_slp)
+        F_i[iᵢₙ]=F_slp[iₛₗₚ]
+        iₛₗₚ==length(F_slp) ? break : iᵢₙ += 1
+        for iₕₑₛ in 1:length(F_hes)
+            _get_rel_pos(F_hes[iₕₑₛ],F_slp[iₛₗₚ])==3 && _get_rel_pos(F_hes[iₕₑₛ],F_slp[iₛₗₚ+1])==1 ?
+                                                    begin F_i[iᵢₙ] = (F_hes[iₕₑₛ],F_hes[iₕₑₛ]); iᵢₙ+=1 end : nothing
         end
-        # X_res aus Konstruktionsmatrix zusammensetzen
-        X_res = zeros(T,Int(sum(X_mtrx_2[1:end])))
-        j = 1
-        for i in 1:length(X_mtrx_1)
-            if X_mtrx_2[i] == 1
-                X_res[j] = X_mtrx_1[i]
-                j += 1
-            elseif X_mtrx_2[i] == 2
-                X_res[j] = X_mtrx_1[i] - ac.d_hes*(X_mtrx_1[i]-X_mtrx_1[i-1])
-                X_res[j+1] = X_mtrx_1[i] + ac.d_hes*(X_mtrx_1[i+1]-X_mtrx_1[i])
-                j += 2
-            end
-        end
-
-        return unique(X_res)
-    else
-        return unique(F_slp)
     end
+
+    # resolve F_hes entries in F_i
+    offs = zero(T)
+    for k in 1:length(F_i)
+        if F_i[k][1] == F_i[k][2]
+            if F_i[k+1][1] == F_i[k+1][2]
+                F_i[k],offs =
+                        ((F_i[k][1]-ac.d_hes*(F_i[k][1]-(F_i[k-1][2]+offs)), F_i[k][2]+ac.d_hes*(F_i[k+1][1]-F_i[k][2])/2), (1-ac.d_hes)*(F_i[k+1][1]-F_i[k][2])/2)
+            else
+                F_i[k],offs =
+                        ((F_i[k][1]-ac.d_hes*(F_i[k][1]-F_i[k-1][2]-offs), F_i[k][2]+ac.d_hes*(F_i[k+1][1]-F_i[k][2])), zero(T))
+            end
+        end
+    end
+    return unique(vcat(collect.(F_i)...)[2:end-1])
 end
 
 function discretize_interval(Fₒᵤₜ::Array{T}, F⁺⁻::Array{T}, ac::AdaptiveGrahamScan) where {T}
