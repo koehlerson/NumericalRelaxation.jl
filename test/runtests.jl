@@ -186,7 +186,6 @@ end
             minPointsPerInterval=15,
             radius=3,
             minStepSize=0.03,
-            forceAdaptivity=false,
             d_hes=0.4)
     @testset "convexify_nonediting!()" begin
         ff = collect.([0:0.25:3, 1:0.25:4, 0.5:4.5])
