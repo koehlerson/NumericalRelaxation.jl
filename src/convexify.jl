@@ -347,15 +347,15 @@ function inv_m(mask::Array{T}) where {T}
     return ones(T,size(mask)) - mask
 end
 
-function distribute_gridpoints!(vecₒᵤₜ::Array, F⁺⁻::Array, ac::AdaptiveGrahamScan)
-    numIntervals = length(F⁺⁻)-1
+function distribute_gridpoints!(vecₒᵤₜ::Array, F_info⁺⁻::Array, ac::AdaptiveGrahamScan)
+    numIntervals = length(F_info⁺⁻)-1
     gridpoints_oninterval = copy(vecₒᵤₜ)
     if ac.distribution == "var"
         # ================================================================================
         # ================= Stuetzstellen auf Intervalle aufteilen =======================
         # ================================================================================
         for i=1:numIntervals
-            gridpoints_oninterval[i] = Int(round((F⁺⁻[i+1]-F⁺⁻[i])/(F⁺⁻[end]-F⁺⁻[1]) * (ac.adaptivegrid_numpoints-1)))
+            gridpoints_oninterval[i] = Int(round((F_info⁺⁻[i+1]-F_info⁺⁻[i])/(F_info⁺⁻[end]-F_info⁺⁻[1]) * (ac.adaptivegrid_numpoints-1)))
         end
         # ================================================================================
         # ======== korrektur --> um vorgegebene Anzahl an Gitterpunkten einzuhalten ======
@@ -400,7 +400,7 @@ function distribute_gridpoints!(vecₒᵤₜ::Array, F⁺⁻::Array, ac::Adaptiv
                 -project(radPol, numGridpointsOnRadius/2-0.001)) / 0.002
             for i in 1:numIntervals
                 if mask_active[i] == 1
-                    linPartOfF = max((F⁺⁻[i+1][1]-F⁺⁻[i][1])-2*ac.radius,0)
+                    linPartOfF = max((F_info⁺⁻[i+1][1]-F_info⁺⁻[i][1])-2*ac.radius,0)
                     gridpoints_oninterval[i] =
                         Int(round( (ac.adaptivegrid_numpoints-1)/(activeIntervals) + linPartOfF/hₘₐₓ ))
                 end
@@ -415,7 +415,7 @@ function distribute_gridpoints!(vecₒᵤₜ::Array, F⁺⁻::Array, ac::Adaptiv
             gridpoints_oninterval = Int.(round.(inv_m(mask_active).*gridpoints_oninterval +     norm_gridpoints_oninterval*active_points))
             # reduktion falls minimale Schrittweite*Stützpunkte > Intervallbreite
             for i in 1:length(gridpoints_oninterval)
-                maxnum = floor((F⁺⁻[i+1][1]-F⁺⁻[i][1])/ac.minStepSize)
+                maxnum = floor((F_info⁺⁻[i+1][1]-F_info⁺⁻[i][1])/ac.minStepSize)
                 if gridpoints_oninterval[i] > maxnum
                     gridpoints_oninterval[i] = maxnum
                     mask_active[i] = 0
