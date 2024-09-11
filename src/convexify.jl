@@ -70,11 +70,11 @@ struct that stores all relevant information for adaptive convexification.
 - `minPointsPerInterval::Int64`
 - `radius::Float64`
 - `minStepSize::Float64`
-- `forceAdaptivity::Bool`
+- `d_hes::Number=0.4
 
 
 # Constructor
-    AdaptiveGrahamScan(interval; basegrid_numpoints=50, adaptivegrid_numpoints=115, exponent=5, distribution="fix", stepSizeIgnoreHessian=0.05, minPointsPerInterval=15, radius=3, minStepSize=0.03, forceAdaptivity=false)
+    AdaptiveGrahamScan(interval; basegrid_numpoints=50, adaptivegrid_numpoints=115, exponent=5, distribution="fix", stepSizeIgnoreHessian=0.05, minPointsPerInterval=15, radius=3, minStepSize=0.03, d_hes=0.4)
 """
 Base.@kwdef struct AdaptiveGrahamScan <: AbstractConvexification
     interval::Vector{Float64}
@@ -86,7 +86,6 @@ Base.@kwdef struct AdaptiveGrahamScan <: AbstractConvexification
     minPointsPerInterval::Int64 = 15
     radius::Float64 = 3                       # nur relevant für: distribution = "fix"
     minStepSize::Float64 = 0.03
-    forceAdaptivity::Bool = false
     d_hes::Number=0.4                         # distance 
 #    AdaptiveGrahamScan(int, bg, np, exp, dis, ighes, mpi, rad, stp, frce, d_hes) = d_hes>=0.5 ? error("assigned value too large d=$(d)>=0.5") : new(int, bg, np, exp, dis, ighes, mpi, rad, stp, frce, d_hes)
 #    end
@@ -319,18 +318,16 @@ function combine(Fₛₗₚ::Array{Tuple{T,T}}, Fₕₑₛ::Array{T}, ac::Adapti
     return unique(vcat(collect.(F_i)...)[2:end-1])
 end
 
-function discretize_interval(Fₒᵤₜ::Array{T}, F⁺⁻::Array{T}, ac::AdaptiveGrahamScan) where {T}
-    if (length(F⁺⁻) > 2) || (ac.forceAdaptivity) # is function convex ?
-        numIntervals = length(F⁺⁻)-1
+function discretize_interval(Fₒᵤₜ::Array{T}, F_info::Array{T}, ac::AdaptiveGrahamScan) where {T}
+    if (length(F_info) > 2) # is function convex ?
+        numIntervals = length(F_info)-1
         gridpoints_oninterval = Array{Int64}(undef,numIntervals)
-        distribute_gridpoints!(gridpoints_oninterval, F⁺⁻, ac)
-        # ================================================================================
-        # ===================================  fill vector  ==============================
-        # ================================================================================
+        distribute_gridpoints!(gridpoints_oninterval, F_info, ac)
+
         ∑gridpoints = sum(gridpoints_oninterval)
         ∑j = 0
         for i=1:numIntervals
-            P = Polynomial(F⁺⁻[i],F⁺⁻[i+1]-F⁺⁻[i], gridpoints_oninterval[i], ac)
+            P = Polynomial(F_info[i],F_info[i+1]-F_info[i], gridpoints_oninterval[i], ac)
             j = 0
             while j < gridpoints_oninterval[i]
                 Fₒᵤₜ[∑j+j+1] = project(P,j)
@@ -338,10 +335,10 @@ function discretize_interval(Fₒᵤₜ::Array{T}, F⁺⁻::Array{T}, ac::Adapti
             end
             ∑j += gridpoints_oninterval[i];
         end
-        Fₒᵤₜ[end] = F⁺⁻[end]
+        Fₒᵤₜ[end] = F_info[end]
         return nothing
     else # if function already convex
-        Fₒᵤₜ .= collect(range(F⁺⁻[1],F⁺⁻[2]; length=ac.adaptivegrid_numpoints))
+        Fₒᵤₜ .= collect(range(F_info[1],F_info[2]; length=ac.adaptivegrid_numpoints))
         return nothing
     end
 end
@@ -358,7 +355,7 @@ function distribute_gridpoints!(vecₒᵤₜ::Array, F⁺⁻::Array, ac::Adaptiv
         # ================= Stuetzstellen auf Intervalle aufteilen =======================
         # ================================================================================
         for i=1:numIntervals
-            gridpoints_oninterval[i] = Int(round((F⁺⁻[i+1]-F⁺⁻[i])/(F⁺⁻[end]-F⁺⁻[1]) * (ac.adaptivegrid_numpoints-1)))                    
+            gridpoints_oninterval[i] = Int(round((F⁺⁻[i+1]-F⁺⁻[i])/(F⁺⁻[end]-F⁺⁻[1]) * (ac.adaptivegrid_numpoints-1)))
         end
         # ================================================================================
         # ======== korrektur --> um vorgegebene Anzahl an Gitterpunkten einzuhalten ======
