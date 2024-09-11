@@ -110,7 +110,7 @@ Function that implements the adaptive Graham's scan convexification without dele
 """
 function convexify(adaptivegraham::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::FUN, F::T1, xargs::Vararg{Any,XN}) where {T1,T2,FUN,XN}
     #init function values **and grid** on coarse grid
-    buffer.basebuffer.values .= [W(F, xargs...) for x in buffer.basebuffer.grid]
+    buffer.basebuffer.values .= [W(x, xargs...) for x in buffer.basebuffer.grid]
     buffer.basegrid_∂²W .= [Tensors.hessian(i->W(i,xargs...), x) for x in buffer.basebuffer.grid]
 
     #construct adpative grid
@@ -279,7 +279,7 @@ end
 
 function combine(Fₛₗₚ::Array{Tuple{T,T}}, Fₕₑₛ::Array{T}, ac::AdaptiveGrahamScan) where {T}
     #d: relative Distanz zwischen Minima in F_hessian und nächstem/vorherigem Punkt an dem Intervallgrenze gesetzt werden soll
-    F_slp = vcat((T((-Inf,)),T((ac.interval[1],))), copy(Fₛₗₚ), (T((ac.interval[2],)),T((Inf,))))
+    F_slp = vcat((one(T)*-Inf,one(T)*ac.interval[1]), copy(Fₛₗₚ), (one(T)*ac.interval[2],one(T)*Inf))
     F_hes = copy(Fₕₑₛ)
 
     # count number of hes vals to ignore
@@ -444,7 +444,7 @@ function iterator(i, mask; dir=1)
     dir in [1, -1] ? nothing : error("search direction must be either positive (1) or negative (-1)")
     ((i>=1) && (i<=length(mask))) ? nothing : error("tried to access vector entry at position "*string(i)*". Must lie between 1 and "*string(length(mask))*".")
     ~(mask[1] == 0) ? nothing : error("first entry of mask is not supposed to be set to false")
-    ~(mask[end] == 0) ? nothing : error("last entry of mask is not supposed to be set to false")        
+    ~(mask[end] == 0) ? nothing : error("last entry of mask is not supposed to be set to false")
 
     if dir == -1
         id_next = findlast(@view mask[1:(i==1 ? 1 : i-1)])
