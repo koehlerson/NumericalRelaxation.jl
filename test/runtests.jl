@@ -1,3 +1,4 @@
+using NumericalRelaxation: check_slope, convexify_nondeleting!
 using NumericalRelaxation
 using StaticArrays
 using Tensors
@@ -187,10 +188,33 @@ end
             minStepSize=0.03,
             forceAdaptivity=false,
             d_hes=0.4)
-    @testset "check_hessian()" begin
-        
+    @testset "convexify_nonediting!()" begin
+        ff = collect.([0:0.25:3, 1:0.25:4, 0.5:4.5])
+        sol = [(1,0,0,0,0,0,1,0,0,0,0,0,1), (1,1,1,0,0,0,0,0,0,0,1,1,1), (1,1,0,1,1)]
+        for (i,f) in enumerate(ff)
+            mask=ones(Bool,length(f))
+            NumericalRelaxation.convexify_nonediting!(f,sin.(π*f),mask)
+            @test mask==Bool[collect(sol[i])...]
+        end
+        f = collect(-0.5:0.1:4.1)
+        mask = ones(Bool, length(f))
+        NumericalRelaxation.convexify_nonediting!(f,W.(f),mask)
+        @test mask == Bool[vcat([1,1],zeros(11),[1,1,1],zeros(29),[1,1])...]
     end
     @testset "check_slope()" begin
+        ff = collect.([0:0.25:3, 1:0.25:4, 0.5:4.5])
+        sol = [[(0.0,1.5),(1.5,3)], [(1.5,3.5)], [(1.5,3.5)]]
+        for (i,f) in enumerate(ff)
+            f_info,lim = NumericalRelaxation.check_slope(f,sin.(π*f))
+            @test f_info==sol[i]
+            @test lim == (sol[i][1]==f[1] || sol[i][end][2]==f[end])
+        end
+        f = collect(-0.5:0.1:4.1)
+        f_info,lim = NumericalRelaxation.check_slope(f,W.(f))
+        @test f_info==[(f[2],f[14]),(f[16],f[46])] && lim==false
+    end
+    @testset "check_hessian()" begin
+        
     end
     @testset "combine()" begin
         F_slp = [[(Tensor{2,1}((x[1],)), Tensor{2,1}((x[2],))) for x in slp]
@@ -297,3 +321,9 @@ end
     Δ = (2. * r) ./ (2.0 .^ (nrefs))
     @test isapprox(errors[end],0.0,atol=1e-3)
 end
+
+
+f = collect(0:0.01:5)
+lines(f,W.(f))
+check_slope(f,W.(f))
+lines(f,W.(f))
