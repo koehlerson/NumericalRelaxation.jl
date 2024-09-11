@@ -213,9 +213,6 @@ end
         f_info,lim = NumericalRelaxation.check_slope(f,W.(f))
         @test f_info==[(f[2],f[14]),(f[16],f[46])] && lim==false
     end
-    @testset "check_hessian()" begin
-        
-    end
     @testset "combine()" begin
         F_slp = [[(Tensor{2,1}((x[1],)), Tensor{2,1}((x[2],))) for x in slp]
                                     for slp in [[(0.001, 1.0), (3.0, 5.0)], [(0.001, 5.0)], [(2.0, 3.0), (4.0, 5.0)]]]
@@ -321,9 +318,3 @@ end
     Δ = (2. * r) ./ (2.0 .^ (nrefs))
     @test isapprox(errors[end],0.0,atol=1e-3)
 end
-
-
-f = collect(0:0.01:5)
-lines(f,W.(f))
-check_slope(f,W.(f))
-lines(f,W.(f))

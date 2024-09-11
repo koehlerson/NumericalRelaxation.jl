@@ -235,9 +235,9 @@ as points of interest as well (only if step size at this point is greater than
 function adaptive_1Dgrid!(ac::AdaptiveGrahamScan, ac_buffer::AdaptiveConvexificationBuffer1D{T1,T2,T3}) where {T1,T2,T3}
     Fₕₑₛ = check_hessian(ac, ac_buffer)
     Fₛₗₚ,lim_reached = check_slope(ac_buffer)
-    F⁺⁻ = combine(Fₛₗₚ, Fₕₑₛ, ac)
-    discretize_interval(ac_buffer.adaptivebuffer.grid, F⁺⁻, ac)
-    return F⁺⁻
+    Fᵢ = combine(Fₛₗₚ, Fₕₑₛ, ac)
+    discretize_interval(ac_buffer.adaptivebuffer.grid, Fᵢ, ac)
+    return Fᵢ
 end
 
 function check_hessian(∂²W::Vector{T2}, F::Vector{T1}, params::AdaptiveGrahamScan) where {T1,T2}
