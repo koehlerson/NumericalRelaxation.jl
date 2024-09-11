@@ -336,7 +336,7 @@ function discretize_interval(Fₒᵤₜ::Array{T}, F⁺⁻::Array{T}, ac::Adapti
                 Fₒᵤₜ[∑j+j+1] = project(P,j)
                 j += 1
             end
-            ∑j += gridpoints_oninterval[i]; 
+            ∑j += gridpoints_oninterval[i];
         end
         Fₒᵤₜ[end] = F⁺⁻[end]
         return nothing
