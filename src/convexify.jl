@@ -163,11 +163,9 @@ Kernel function that implements the actual convexification without editing F and
 function convexify_nonediting!(F, W, mask::Vector{Bool})
     for i in 3:length(F)
         n = iterator(i,mask;dir=-1)
-        println("i=$(i), n=$(n), $(~is_convex((F[n-1], W[n-1]),(F[n], W[n]),(F[i], W[i])))")
         while n >=2 && ~is_convex((F[iterator(n,mask;dir=-1)], W[iterator(n,mask;dir=-1)]),(F[n], W[n]),(F[i], W[i]))
             mask[n]=0
             n = iterator(i,mask;dir=-1)
-            println("n=$(n)")
         end
     end
 end
@@ -262,50 +260,18 @@ function check_slope(ac_buffer::AdaptiveConvexificationBuffer1D)
 end
 
 function check_slope(F::Vector{T2}, W::Vector{T1}) where {T2,T1}
-    # if lower limit of intervall is part of convex hull, algorithm stops regardless of current state of convexification. result is likely to still contain non-convex parts.
+    # determin convex hull
     mask = ones(Bool,length(F))
-    l = 1   # links
-    m = 2   # mitte
-    r = 3 # rechts
-    dir = 1 # positive search direction
-    lim_reached = false
-    while r<length(W) || ~is_convex((F[l],W[l]), (F[m],W[m]), (F[r],W[r]))
-        if ~is_convex((F[l],W[l]), (F[m],W[m]), (F[r],W[r]))
-            convex = false
-            while ~(convex)
-                convex=true
-                if ~is_convex((F[l],W[l]), (F[m],W[m]), (F[r],W[r]))
-                    convex = false
-                    while ~is_convex((F[l],W[l]), (F[m],W[m]), (F[r],W[r]))
-                        mask[m]=0
-                        if (m==length(W)-1) || (m==2)
-                            lim_reached=true
-                            break
-                        end
-                        m = iterator(m, mask; dir=dir)
-                        dir==1 ? r=iterator(m, mask; dir=1) : l=iterator(m, mask; dir=-1)
-                    end
-                    lim_reached ? break : nothing
-                    dir *= -1 # switch search dir.
-                    m = iterator(m, mask; dir=dir)
-                    l=iterator(m, mask; dir=-1)
-                    r=iterator(m, mask; dir=1)
-                end
-            end
-            lim_reached ? break : nothing
-            dir=1
-        else
-            m = iterator(m, mask; dir=1)
-            l = iterator(m, mask; dir=-1)
-            r = iterator(m, mask; dir=1)
-        end
-    end
+    convexify_nonediting!(F,W,mask)
+
+    # write non convex intervals into F_info
     F_info = Vector{Tuple{typeof(F[1]),typeof(F[1])}}()
     for i in 1:length(F)
         i>1 && (mask[i-1]==0) && (mask[i]==1) ? (F_info[end]=(F_info[end][1],F[i])) : nothing
         i<length(F) && (mask[i]==1) && (mask[i+1]==0) && push!(F_info,(F[i],zero(F[i])))
     end
-    return F_info, lim_reached
+
+    return F_info, mask[2]==0||mask[end-1]==0
 end
 
 function _get_rel_pos(F::T, F_int::Tuple{T,T}) where {T}
