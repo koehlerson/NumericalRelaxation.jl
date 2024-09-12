@@ -374,39 +374,23 @@ function iterator(i, mask; dir=1)
     return id_next!=nothing ? id_next : error("findlast/findfirst returned value of type \"nothing\".")
 end
 
-function project(P::Polynomial, n)
-    if P.distribution == "var"
-        if n < P.numpoints/2
-            pot = 1
-            for i=1:P.exponent
-                pot *= (n)
-            end
-            return (pot*P.a + P.b*n + P.c)
-        else
-            pot = 1
-            for i=1:P.exponent
-                pot *= (P.numpoints-n)
-            end
-            return P.F+P.ΔF - (pot*P.a + P.b*(P.numpoints-n))
+function project(n, P::Polynomial)
+    if (n>=0) && (n<P.n)
+        pot = 1
+        for i=1:P.exponent
+            pot *= (n)
         end
+        return (P.a*pot + P.b*n + P.c)
+    elseif (n>=P.n) && (n<P.numpoints-P.n)
+        P.d*n+P.e
+    elseif (n>=P.numpoints-P.n) && (n<= P.numpoints)
+        pot = 1
+        for i=1:P.exponent
+            pot *= (P.numpoints-n)
+        end
+        return P.F+P.ΔF - (P.a*pot+P.b*(P.numpoints-n))
     else
-        if (n>=0) && (n<P.n)
-            pot = 1
-            for i=1:P.exponent
-                pot *= (n)
-            end
-            return (P.a*pot + P.b*n + P.c)
-        elseif (n>=P.n) && (n<P.numpoints-P.n)
-            P.d*n+P.e
-        elseif (n>=P.numpoints-P.n) && (n<= P.numpoints)
-            pot = 1
-            for i=1:P.exponent
-                pot *= (P.numpoints-n)
-            end
-            return P.F+P.ΔF - (P.a*pot+P.b*(P.numpoints-n))
-        else
-            error("projecion-polynomial only defined for indices 0>=j>=$P.numpoints")
-        end
+        error("projecion-polynomial only defined for indices 0>=j>=$P.numpoints")
     end
 end
 
