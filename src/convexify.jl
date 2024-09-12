@@ -1147,13 +1147,22 @@ end
 isorthogonal(laminate::Nothing, 𝐀::Tensor{2}) = false
 
 mutable struct BinaryLaminationTree{dim,T,N}
-    F::Tensor{2,dim,T,N}
+    F::Union{T,Tensor{2,dim,T,N}}
     W::T
     ξ::T
     level::Int
     parent::Union{BinaryLaminationTree{dim,T,N},Nothing}
     minus::Union{BinaryLaminationTree{dim,T,N},Nothing}
     plus::Union{BinaryLaminationTree{dim,T,N},Nothing}
+
+    function BinaryLaminationTree(F::Tensor{order,dimp,T,N},W::T,ξ::T,l::Int,parent,minus,plus) where {order,dimp,T,N}
+        return new{dimp,T,N}(F,W,ξ,l,parent,minus,plus)
+    end
+
+    function BinaryLaminationTree(F::T,W::T,ξ::T,l::Int,parent,minus,plus) where {T<:Number}
+        return new{1,T,1}(F,W,ξ,l,parent,minus,plus)
+    end
+
 end
 
 BinaryLaminationTree(F,W,ξ,l) = BinaryLaminationTree(F,W,ξ,l,nothing,nothing,nothing)
@@ -1561,7 +1570,7 @@ function AbstractTrees.children(node::BinaryLaminationTree)
         if !isnothing(node.plus)
             return (node.minus, node.plus)
         end
-        return (node.left,)
+        return (node.minus,)
     end
     !isnothing(node.plus) && return (node.plus,)
     return ()
