@@ -74,19 +74,18 @@ struct that stores all relevant information for adaptive convexification.
 
 
 # Constructor
-    AdaptiveGrahamScan(interval; basegrid_numpoints=50, adaptivegrid_numpoints=115, exponent=5, distribution="fix", stepSizeIgnoreHessian=0.05, minPointsPerInterval=15, radius=3, minStepSize=0.03, d_hes=0.4)
+    AdaptiveGrahamScan(interval; basegrid_numpoints=50, adaptivegrid_numpoints=115, exponent=5, stepSizeIgnoreHessian=0.05, minPointsPerInterval=15, radius=3, minStepSize=0.03, d_hes=0.4)
 """
 Base.@kwdef struct AdaptiveGrahamScan <: AbstractConvexification
     interval::Vector{Float64}
     basegrid_numpoints::Int64 = 50
     adaptivegrid_numpoints::Int64 = 115
     exponent::Int64 = 5
-    distribution::String = "fix"
-    stepSizeIgnoreHessian::Float64 = 0.05     # minimale Schrittweite für die Hesse berücksichtigt wird 
+    stepSizeIgnoreHessian::Float64 = 0.05     # minimale Schrittweite für die Hesse berücksichtigt wird
     minPointsPerInterval::Int64 = 15
-    radius::Float64 = 3                       # nur relevant für: distribution = "fix"
+    radius::Float64 = 3
     minStepSize::Float64 = 0.03
-    d_hes::Number=0.4                         # distance 
+    d_hes::Number=0.4                         # distance
 #    AdaptiveGrahamScan(int, bg, np, exp, dis, ighes, mpi, rad, stp, frce, d_hes) = d_hes>=0.5 ? error("assigned value too large d=$(d)>=0.5") : new(int, bg, np, exp, dis, ighes, mpi, rad, stp, frce, d_hes)
 #    end
 end
@@ -176,7 +175,6 @@ end
 ####################################################
 
 struct Polynomial{T1<:Union{Float64,Tensors.Tensor{2,1}}}
-    distribution::String
     F::T1
     ΔF::T1
     exponent::Int64
@@ -190,25 +188,15 @@ struct Polynomial{T1<:Union{Float64,Tensors.Tensor{2,1}}}
     c::T1
     d::T1
     e::T1
-    function Polynomial(F::T, ΔF::T, numpoints::Int, ac::AdaptiveGrahamScan) where {T}#exponent::Int, numpoints, distribution="fix", r=1.0, hₘᵢₙ=0.00001) where {T}
-        if ac.distribution == "var"
-            c = F
-            b = one(T)* ac.minStepSize
-            a = one(T)* (2/numpoints)^ac.exponent*(ΔF[1]/2-ac.minStepSize*numpoints/2)
-            d = one(T)* 0.0
-            e = one(T)* 0.0
-            n = 0.0
-            rad = copy(ac.radius)
-        elseif ac.distribution == "fix" || (ac.distribution == "fix_neu")
-            rad =  ac.radius<ΔF[1]/2 ? ac.radius/1 : ΔF[1]/2
-            c = F
-            b = one(T)* ac.minStepSize
-            d = one(T)* (1/(2*numpoints)*(sqrt((ΔF[1]-(ac.exponent-1)*(b[1]*numpoints-2*rad))^2+4*b[1]*numpoints*(ac.exponent-1)*(ΔF[1]-2*rad))-b[1]*numpoints*ac.exponent+b[1]*numpoints+ΔF[1]+2*ac.exponent*rad-2*rad))
-            n = (rad-ΔF[1]/2)/d[1]+numpoints/2
-            e = F+ΔF/2-d*numpoints/2
-            a = (d-b)/(ac.exponent*n^(ac.exponent-1))
-        end
-        return new{T}(ac.distribution, F, ΔF, ac.exponent, numpoints, ac.minStepSize, rad, n, a, b, c, d, e)
+    function Polynomial(F::T, ΔF::T, numpoints::Int, ac::AdaptiveGrahamScan) where {T}
+        rad =  ac.radius<ΔF[1]/2 ? ac.radius/1 : ΔF[1]/2
+        c = F
+        b = one(T)* ac.minStepSize
+        d = one(T)* (1/(2*numpoints)*(sqrt((ΔF[1]-(ac.exponent-1)*(b[1]*numpoints-2*rad))^2+4*b[1]*numpoints*(ac.exponent-1)*(ΔF[1]-2*rad))-b[1]*numpoints*ac.exponent+b[1]*numpoints+ΔF[1]+2*ac.exponent*rad-2*rad))
+        n = (rad-ΔF[1]/2)/d[1]+numpoints/2
+        e = F+ΔF/2-d*numpoints/2
+        a = (d-b)/(ac.exponent*n^(ac.exponent-1))
+        return new{T}(F, ΔF, ac.exponent, numpoints, ac.minStepSize, rad, n, a, b, c, d, e)
     end
 end
 
@@ -321,147 +309,54 @@ function combine(Fₛₗₚ::Array{Tuple{T,T}}, Fₕₑₛ::Array{T}, ac::Adapti
 end
 
 function discretize_interval(Fₒᵤₜ::Array{T}, F_info::Array{T}, ac::AdaptiveGrahamScan) where {T}
-    if (length(F_info) > 2) # is function convex ?
-        numIntervals = length(F_info)-1
-        gridpoints_oninterval = Array{Int64}(undef,numIntervals)
-        distribute_gridpoints!(gridpoints_oninterval, F_info, ac)
-
-println("gridpoints_oninterval = ")
-display(gridpoints_oninterval)
-        ∑gridpoints = sum(gridpoints_oninterval)
-        ∑j = 0
-        for i=1:numIntervals
-            P = Polynomial(F_info[i],F_info[i+1]-F_info[i], gridpoints_oninterval[i], ac)
-            j = 0
-            while j < gridpoints_oninterval[i]
-                Fₒᵤₜ[∑j+j+1] = project(P,j)
-                j += 1
-            end
-            ∑j += gridpoints_oninterval[i];
-        end
-        Fₒᵤₜ[end] = F_info[end]
-        return nothing
-    else # if function already convex
+    # is function convex ?
+    if length(F_info) <= 2
         Fₒᵤₜ .= collect(range(F_info[1],F_info[2]; length=ac.adaptivegrid_numpoints))
-        return nothing
+        return
     end
+
+    # calculate number of gridpoints per interval
+    gridpoints_oninterval = Array{Int64}(undef,length(F_info)-1)
+    distribute_gridpoints!(gridpoints_oninterval, F_info, ac)
+
+    # calculate actual position of each gridpoint
+    ∑j = 0
+    for i=1:length(F_info)-1
+        P = Polynomial(F_info[i],F_info[i+1]-F_info[i], gridpoints_oninterval[i], ac)
+        j = 0
+        while j < gridpoints_oninterval[i]
+            Fₒᵤₜ[∑j+j+1] = project(P,j)
+            j += 1
+        end
+        ∑j += gridpoints_oninterval[i];
+    end
+    Fₒᵤₜ[end] = F_info[end]
+    return
 end
 
 function inv_m(mask::Array{T}) where {T}
     return ones(T,size(mask)) - mask
 end
 
-function distribute_gridpoints!(vecₒᵤₜ::Array, F_info::Array, ac::AdaptiveGrahamScan)
-    numIntervals = length(F_info)-1
-    gridpoints_oninterval = zeros(Int,length(vecₒᵤₜ))#copy(vecₒᵤₜ)
-    if ac.distribution == "var"
-        # ================================================================================
-        # ================= Stuetzstellen auf Intervalle aufteilen =======================
-        # ================================================================================
-        for i=1:numIntervals
-            gridpoints_oninterval[i] = Int(round((F_info[i+1]-F_info[i])/(F_info[end]-F_info[1]) * (ac.adaptivegrid_numpoints-1)))
-        end
-        # ================================================================================
-        # ======== korrektur --> um vorgegebene Anzahl an Gitterpunkten einzuhalten ======
-        # ================================================================================
-        # normierung
-        norm_gridpoints_oninterval = gridpoints_oninterval/sum(gridpoints_oninterval)
-        gridpoints_oninterval = Int.(round.(norm_gridpoints_oninterval*(ac.adaptivegrid_numpoints-1))) 
-        # Mindestanzahl eingehlaten?
-        for i in 1:length(gridpoints_oninterval)
-            gridpoints_oninterval[i] = max(ac.minPointsPerInterval,gridpoints_oninterval[i])
-        end
-        # differenz ausgleichen
-        ∑gridpoints = sum(gridpoints_oninterval)
-        if ∑gridpoints != (ac.adaptivegrid_numpoints-1)
-            dif = (ac.adaptivegrid_numpoints-1) - ∑gridpoints
-            iₘₐₓ = 1
-            for i in 2:numIntervals
-                gridpoints_oninterval[i]>gridpoints_oninterval[iₘₐₓ] ? iₘₐₓ = i : ()
-            end
-            gridpoints_oninterval[iₘₐₓ] += dif
-        end
-        # Einträge übertragen
-        vecₒᵤₜ .= gridpoints_oninterval
-        return nothing
-    elseif ac.distribution == "fix"
-        mask_active = ones(Bool, numIntervals)
-        mask_active_last = zeros(Bool, numIntervals)
-        cnt = 1
-        while (sum(mask_active_last-mask_active)!=0) && (cnt<=10)
-            # ================================================================================
-            # ================= Stuetzstellen auf Intervalle aufteilen =======================
-            # ================================================================================ 
-            mask_active_last = copy(mask_active)
-            activeIntervals = sum(mask_active)
-            activeIntervals==0 ? error("Could not distribute grid points among intervalls. Try to reduce number of grid points or decrease minimum step size.") : nothing 
-            numGridpointsOnRadius =
-                Int(round( (ac.adaptivegrid_numpoints-1-sum(gridpoints_oninterval.*inv_m(mask_active)))
-                /(activeIntervals) ))
-            radPol = Polynomial(0.0,2*ac.radius, numGridpointsOnRadius, ac)
-            hₘₐₓ =
-                (project(radPol, numGridpointsOnRadius/2+0.001)
-                -project(radPol, numGridpointsOnRadius/2-0.001)) / 0.002
-            for i in 1:numIntervals
-                if mask_active[i] == 1
-                    linPartOfF = max((F_info[i+1][1]-F_info[i][1])-2*ac.radius,0)
-                    gridpoints_oninterval[i] =
-                        Int(round( (ac.adaptivegrid_numpoints-1)/(activeIntervals) + linPartOfF/hₘₐₓ ))
-                end
-            end
-            # ================================================================================
-            # ======== korrektur --> um vorgegebene Anzahl an Gitterpunkten einzuhalten ======
-            # ================================================================================
-            # normierung
-            norm_gridpoints_oninterval = gridpoints_oninterval./(sum(mask_active.*gridpoints_oninterval))
-            norm_gridpoints_oninterval .*= mask_active
-            active_points = ac.adaptivegrid_numpoints - 1 - sum(inv_m(mask_active).*gridpoints_oninterval)
-            gridpoints_oninterval = Int.(round.(inv_m(mask_active).*gridpoints_oninterval +     norm_gridpoints_oninterval*active_points))
-            # reduktion falls minimale Schrittweite*Stützpunkte > Intervallbreite
-            for i in 1:length(gridpoints_oninterval)
-                maxnum = floor((F_info[i+1][1]-F_info[i][1])/ac.minStepSize)
-                if gridpoints_oninterval[i] > maxnum
-                    gridpoints_oninterval[i] = maxnum
-                    mask_active[i] = 0
-                end
-            end
-            cnt += 1
-        end
-        # differenz ausgleichen
-        ∑gridpoints = sum(gridpoints_oninterval)
-        if ∑gridpoints != (ac.adaptivegrid_numpoints-1)
-            dif = (ac.adaptivegrid_numpoints-1) - ∑gridpoints
-            iₘₐₓ = 1
-            for i in 2:numIntervals
-                gridpoints_oninterval[i]>gridpoints_oninterval[iₘₐₓ] ? iₘₐₓ = i : ()
-            end
-            gridpoints_oninterval[iₘₐₓ] += dif
-        end
-        # Einträge übertragen
-        vecₒᵤₜ .= gridpoints_oninterval
-        return nothing
-
-
-    elseif ac.distribution == "fix_neu"
-
-        #check if min step size allows for equal distribution of points
-        int = [F_info[i+1][1]-F_info[i][1] for i in 1:length(F_info)-1]
-        for (i,ip) in enumerate(sortperm(int))
-            (ac.adaptivegrid_numpoints-sum(gridpoints_oninterval))/(length(F_info)-i) >
-                                 (int[ip])/ac.minStepSize ? gridpoints_oninterval[ip] = Int(floor((int[ip])/ac.minStepSize)) : break
-        end
-
-        # distribute remaining points evenly on remaining intervals
-        remaining_points = ac.adaptivegrid_numpoints-sum(gridpoints_oninterval)
-        activeint = iszero.(gridpoints_oninterval)
-        for (i,ip) in enumerate(sortperm(int.*activeint,rev=true))
-            if activeint[ip]
-                addpoint = i<=remaining_points%sum(activeint) ? 1 : 0
-                gridpoints_oninterval[ip] = floor(remaining_points/sum(activeint)) + addpoint
-            end
-        end
-        vecₒᵤₜ .= gridpoints_oninterval
+function distribute_gridpoints!(gridpoints_oninterval::Array{Int}, F_info::Array, ac::AdaptiveGrahamScan)
+    gridpoints_oninterval .= zeros(Int,length(F_info)-1)
+    #check if min step size allows for equal distribution of points
+    int = [F_info[i+1][1]-F_info[i][1] for i in 1:length(F_info)-1]
+    for (i,ip) in enumerate(sortperm(int))
+        (ac.adaptivegrid_numpoints-sum(gridpoints_oninterval))/(length(F_info)-i) >
+                             (int[ip])/ac.minStepSize ? gridpoints_oninterval[ip] = Int(floor((int[ip])/ac.minStepSize)) : break
     end
+
+    # distribute remaining points evenly on remaining intervals
+    remaining_points = ac.adaptivegrid_numpoints-sum(gridpoints_oninterval)
+    activeint = iszero.(gridpoints_oninterval)
+    for (i,ip) in enumerate(sortperm(int.*activeint,rev=true))
+        if activeint[ip]
+            addpoint = i<=remaining_points%sum(activeint) ? 1 : 0
+            gridpoints_oninterval[ip] = floor(remaining_points/sum(activeint)) + addpoint
+        end
+    end
+    sum(gridpoints_oninterval) != ac.adaptivegrid_numpoints ? error("algorithm needs closer look here!") : return
 end
 
 function iterator(i, mask; dir=1)
