@@ -443,26 +443,21 @@ function distribute_gridpoints!(vecₒᵤₜ::Array, F_info::Array, ac::Adaptive
 
 
     elseif ac.distribution == "fix_neu"
+
+        #check if min step size allows for equal distribution of points
         int = [F_info[i+1][1]-F_info[i][1] for i in 1:length(F_info)-1]
-        p = sortperm(int)
-        for (i,ip) in enumerate(p)
-            avgPoints =(ac.adaptivegrid_numpoints-sum(gridpoints_oninterval))/(length(F_info)-i)
-            minPoints = (int[ip])/ac.minStepSize
-            if avgPoints > minPoints
-                gridpoints_oninterval[ip] = Int(floor((int[ip])/ac.minStepSize))
-            else
-                break
-            end
+        for (i,ip) in enumerate(sortperm(int))
+            (ac.adaptivegrid_numpoints-sum(gridpoints_oninterval))/(length(F_info)-i) >
+                                 (int[ip])/ac.minStepSize ? gridpoints_oninterval[ip] = Int(floor((int[ip])/ac.minStepSize)) : break
         end
 
+        # distribute remaining points evenly on remaining intervals
         remaining_points = ac.adaptivegrid_numpoints-sum(gridpoints_oninterval)
         activeint = iszero.(gridpoints_oninterval)
-        nactive = sum(activeint)
-
         for (i,ip) in enumerate(sortperm(int.*activeint,rev=true))
             if activeint[ip]
-                addpoint = i<=remaining_points%nactive ? 1 : 0
-                gridpoints_oninterval[ip] = floor(remaining_points/nactive) + addpoint
+                addpoint = i<=remaining_points%sum(activeint) ? 1 : 0
+                gridpoints_oninterval[ip] = floor(remaining_points/sum(activeint)) + addpoint
             end
         end
         vecₒᵤₜ .= gridpoints_oninterval
