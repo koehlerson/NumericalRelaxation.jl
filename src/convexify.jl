@@ -62,42 +62,39 @@ struct that stores all relevant information for adaptive convexification.
 
 # Fields
 - `interval::Vector{Float64}`
-- `basegrid_numpoints::Int64`
-- `adaptivegrid_numpoints::Int64`
+- `n_coarse::Int64`
+- `n_adaptive::Int64`
 - `exponent::Int64`
-- `distribution::String`
-- `stepSizeIgnoreHessian::Float64`
-- `minPointsPerInterval::Int64`
+- `max_step_hessian::Float64`
 - `radius::Float64`
-- `minStepSize::Float64`
+- `min_step::Float64`
 - `d_hes::Number=0.4
 
 
 # Constructor
-    AdaptiveGrahamScan(interval; basegrid_numpoints=50, adaptivegrid_numpoints=115, exponent=5, stepSizeIgnoreHessian=0.05, minPointsPerInterval=15, radius=3, minStepSize=0.03, d_hes=0.4)
+    AdaptiveGrahamScan(interval; n_coarse=50, n_adaptive=115, exponent=5, max_step_hessian=0.05, radius=3, min_step=0.03, d_hes=0.4)
 """
 Base.@kwdef struct AdaptiveGrahamScan <: AbstractConvexification
-    interval::Vector{Float64}
-    basegrid_numpoints::Int64 = 50
-    adaptivegrid_numpoints::Int64 = 115
+    interval::Tuple{Float64,Float64}
+    n_coarse::Int64 = 50
+    n_adaptive::Int64 = 115
     exponent::Int64 = 5
-    stepSizeIgnoreHessian::Float64 = 0.05     # minimale Schrittweite für die Hesse berücksichtigt wird
-    minPointsPerInterval::Int64 = 15
+    max_step_hessian::Float64 = 0.05     # minimale Schrittweite für die Hesse berücksichtigt wird
     radius::Float64 = 3
-    minStepSize::Float64 = 0.03
+    min_step::Float64 = 0.03
     d_hes::Number=0.4                         # distance
 #    AdaptiveGrahamScan(int, bg, np, exp, dis, ighes, mpi, rad, stp, frce, d_hes) = d_hes>=0.5 ? error("assigned value too large d=$(d)>=0.5") : new(int, bg, np, exp, dis, ighes, mpi, rad, stp, frce, d_hes)
 #    end
 end
 
-δ(s::AdaptiveGrahamScan) = step(range(s.interval[1],s.interval[2],length=s.adaptivegrid_numpoints))
+δ(s::AdaptiveGrahamScan) = step(range(s.interval[1],s.interval[2],length=s.n_adaptive))
 
 function build_buffer(ac::AdaptiveGrahamScan)
-    basegrid_F = [Tensors.Tensor{2,1}((x,)) for x in range(ac.interval[1],ac.interval[2],length=ac.basegrid_numpoints)]
-    basegrid_W = zeros(Float64,ac.basegrid_numpoints)
-    basegrid_∂²W = [Tensors.Tensor{4,1}((x,)) for x in zeros(Float64,ac.basegrid_numpoints)]
-    adaptivegrid_F = [Tensors.Tensor{2,1}((x,)) for x in zeros(Float64,ac.adaptivegrid_numpoints)]
-    adaptivegrid_W = zeros(Float64,ac.adaptivegrid_numpoints)
+    basegrid_F = [Tensors.Tensor{2,1}((x,)) for x in range(ac.interval[1],ac.interval[2],length=ac.n_coarse)]
+    basegrid_W = zeros(Float64,ac.n_coarse)
+    basegrid_∂²W = [Tensors.Tensor{4,1}((x,)) for x in zeros(Float64,ac.n_coarse)]
+    adaptivegrid_F = [Tensors.Tensor{2,1}((x,)) for x in zeros(Float64,ac.n_adaptive)]
+    adaptivegrid_W = zeros(Float64,ac.n_adaptive)
     basebuffer = ConvexificationBuffer1D(basegrid_F,basegrid_W)
     adaptivebuffer = ConvexificationBuffer1D(adaptivegrid_F,adaptivegrid_W)
     return AdaptiveConvexificationBuffer1D(basebuffer,adaptivebuffer,basegrid_∂²W)
@@ -191,12 +188,12 @@ struct Polynomial{T1<:Union{Float64,Tensors.Tensor{2,1}}}
     function Polynomial(F::T, ΔF::T, numpoints::Int, ac::AdaptiveGrahamScan) where {T}
         rad =  ac.radius<ΔF[1]/2 ? ac.radius/1 : ΔF[1]/2
         c = F
-        b = one(T)* ac.minStepSize
+        b = one(T)* ac.min_step
         d = one(T)* (1/(2*numpoints)*(sqrt((ΔF[1]-(ac.exponent-1)*(b[1]*numpoints-2*rad))^2+4*b[1]*numpoints*(ac.exponent-1)*(ΔF[1]-2*rad))-b[1]*numpoints*ac.exponent+b[1]*numpoints+ΔF[1]+2*ac.exponent*rad-2*rad))
         n = (rad-ΔF[1]/2)/d[1]+numpoints/2
         e = F+ΔF/2-d*numpoints/2
         a = (d-b)/(ac.exponent*n^(ac.exponent-1))
-        return new{T}(F, ΔF, ac.exponent, numpoints, ac.minStepSize, rad, n, a, b, c, d, e)
+        return new{T}(F, ΔF, ac.exponent, numpoints, ac.min_step, rad, n, a, b, c, d, e)
     end
 end
 
@@ -217,14 +214,12 @@ The resultiong grid will be broadcasted into `ac_buffer.adaptivebuffer.grid`.
 F⁺⁻ will be determined by checking the slope of mathematical function W(F). Start and end
 points of non-convex subintervals will be stored. Additionally all minima of ∂²W(F) serve
 as points of interest as well (only if step size at this point is greater than
-`ac.stepSizeIgnoreHessian`).
+`ac.max_step_hessian`).
 """
 function adaptive_1Dgrid!(ac::AdaptiveGrahamScan, ac_buffer::AdaptiveConvexificationBuffer1D{T1,T2,T3}) where {T1,T2,T3}
     Fₕₑₛ = check_hessian(ac, ac_buffer)
     Fₛₗₚ,lim_reached = check_slope(ac_buffer)
     Fᵢ = combine(Fₛₗₚ, Fₕₑₛ, ac)
-println("Fᵢ = ")
-display(Fᵢ)
     discretize_interval(ac_buffer.adaptivebuffer.grid, Fᵢ, ac)
     return Fᵢ
 end
@@ -233,7 +228,7 @@ function check_hessian(∂²W::Vector{T2}, F::Vector{T1}, params::AdaptiveGraham
     length(∂²W) == length(F) ? nothing : error("cannot process arguments of different length.")
     Fₕₑₛ = zeros(T1,0)
     for i in 2:length(∂²W)-1
-        if (∂²W[i][1] < ∂²W[i-1][1]) && (∂²W[i][1] < ∂²W[i+1][1]) && ((F[i+1][1]-F[i-1][1])/2 > params.stepSizeIgnoreHessian)
+        if (∂²W[i][1] < ∂²W[i-1][1]) && (∂²W[i][1] < ∂²W[i+1][1]) && ((F[i+1][1]-F[i-1][1])/2 > params.max_step_hessian)
             push!(Fₕₑₛ,F[i])
         end
     end
@@ -311,52 +306,43 @@ end
 function discretize_interval(Fₒᵤₜ::Array{T}, F_info::Array{T}, ac::AdaptiveGrahamScan) where {T}
     # is function convex ?
     if length(F_info) <= 2
-        Fₒᵤₜ .= collect(range(F_info[1],F_info[2]; length=ac.adaptivegrid_numpoints))
+        Fₒᵤₜ .= collect(range(F_info[1],F_info[2]; length=ac.n_adaptive))
         return
     end
 
     # calculate number of gridpoints per interval
-    gridpoints_oninterval = Array{Int64}(undef,length(F_info)-1)
-    distribute_gridpoints!(gridpoints_oninterval, F_info, ac)
+    pnts_perint = Array{Int64}(undef,length(F_info)-1)
+    distribute_gridpoints!(pnts_perint, F_info, ac)
 
     # calculate actual position of each gridpoint
-    ∑j = 0
     for i=1:length(F_info)-1
-        P = Polynomial(F_info[i],F_info[i+1]-F_info[i], gridpoints_oninterval[i], ac)
-        j = 0
-        while j < gridpoints_oninterval[i]
-            Fₒᵤₜ[∑j+j+1] = project(P,j)
-            j += 1
-        end
-        ∑j += gridpoints_oninterval[i];
+        P = Polynomial(F_info[i],F_info[i+1]-F_info[i], pnts_perint[i], ac)
+        rnge = (sum(pnts_perint[1:(i-1)])+1) .+ collect(0:(pnts_perint[i]-1))
+        Fₒᵤₜ[rnge] .= project.(0:(pnts_perint[i]-1),(P,))
     end
     Fₒᵤₜ[end] = F_info[end]
     return
 end
 
-function inv_m(mask::Array{T}) where {T}
-    return ones(T,size(mask)) - mask
-end
-
-function distribute_gridpoints!(gridpoints_oninterval::Array{Int}, F_info::Array, ac::AdaptiveGrahamScan)
-    gridpoints_oninterval .= zeros(Int,length(F_info)-1)
+function distribute_gridpoints!(pnts_perint::Array{Int}, F_info::Array, ac::AdaptiveGrahamScan)
+    pnts_perint .= zeros(Int,length(F_info)-1)
     #check if min step size allows for equal distribution of points
     int = [F_info[i+1][1]-F_info[i][1] for i in 1:length(F_info)-1]
     for (i,ip) in enumerate(sortperm(int))
-        (ac.adaptivegrid_numpoints-sum(gridpoints_oninterval))/(length(F_info)-i) >
-                             (int[ip])/ac.minStepSize ? gridpoints_oninterval[ip] = Int(floor((int[ip])/ac.minStepSize)) : break
+        (ac.n_adaptive-sum(pnts_perint))/(length(F_info)-i) >
+                             (int[ip])/ac.min_step ? pnts_perint[ip] = Int(floor((int[ip])/ac.min_step)) : break
     end
 
     # distribute remaining points evenly on remaining intervals
-    remaining_points = ac.adaptivegrid_numpoints-sum(gridpoints_oninterval)
-    activeint = iszero.(gridpoints_oninterval)
+    remaining_points = ac.n_adaptive-sum(pnts_perint)
+    activeint = iszero.(pnts_perint)
     for (i,ip) in enumerate(sortperm(int.*activeint,rev=true))
         if activeint[ip]
             addpoint = i<=remaining_points%sum(activeint) ? 1 : 0
-            gridpoints_oninterval[ip] = floor(remaining_points/sum(activeint)) + addpoint
+            pnts_perint[ip] = floor(remaining_points/sum(activeint)) + addpoint
         end
     end
-    sum(gridpoints_oninterval) != ac.adaptivegrid_numpoints ? error("algorithm needs closer look here!") : return
+    sum(pnts_perint) != ac.n_adaptive ? error("algorithm needs closer look here!") : return
 end
 
 function iterator(i, mask; dir=1)
