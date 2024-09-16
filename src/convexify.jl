@@ -342,7 +342,9 @@ function distribute_gridpoints!(pnts_perint::Array{Int}, F_info::Array, ac::Adap
             pnts_perint[ip] = floor(remaining_points/sum(activeint)) + addpoint
         end
     end
-    sum(pnts_perint) != ac.n_adaptive ? error("algorithm needs closer look here!") : return
+    if sum(pnts_perint) != ac.n_adaptive
+        all(x->x==0,activeint) ? error("reduce n_adaptive!") : error("algorithm needs closer look here!")
+    end
 end
 
 function iterator(i, mask; dir=1)
@@ -1084,7 +1086,7 @@ function rankonedir(laminate::Laminate{dim}) where dim
     start_𝐀 = Tensor{2,dim}((i,j)->round(start_𝐀[i,j]))
 end
 
-@doc raw"""    
+@doc raw"""
     convexify(hroc::HROC, buffer::HROCBuffer, W::FUN, F::T1, xargs::Vararg{Any,XN}) -> bt::BinaryLaminationTree
 Performs a hierarchical rank one convexification (HROC) based on the H-sequence characterization of the convex envelope.
 Note that the output of the algorithm is only an upper bound. For a class of problems the provided hull matches the rank-one convex envelope.
@@ -1094,7 +1096,7 @@ function convexify(hroc::HROC, buffer::HROCBuffer, W::FUN, F::T1, xargs::Vararg{
     return BinaryLaminationTree(hroc,buffer,W,F,xargs...)
 end
 
-@doc raw"""    
+@doc raw"""
     convexify(prev_bt::BinaryLaminationTree,hroc::HROC, buffer::HROCBuffer, W::FUN, F::T1, xargs::Vararg{Any,XN}) -> bt::BinaryLaminationTree
 Performs a hierarchical rank one convexification (HROC) based and enforces laminate continuity by preferring the previous laminate direction.
 """
