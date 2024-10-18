@@ -75,7 +75,7 @@ struct that stores all relevant information for adaptive convexification.
     AdaptiveGrahamScan(interval; n_coarse=50, n_adaptive=115, exponent=5, max_step_hessian=0.05, radius=3, min_step=0.03, d_hes=0.4)
 """
 Base.@kwdef struct AdaptiveGrahamScan <: AbstractConvexification
-    interval::Tuple{Float64,Float64}
+    interval::Vector{Float64}
     n_coarse::Int64 = 50
     n_adaptive::Int64 = 115
     exponent::Int64 = 5
@@ -105,21 +105,36 @@ end
 Function that implements the adaptive Graham's scan convexification without deletion in $\mathcal{O}(N)$.
 """
 function convexify(adaptivegraham::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::FUN, F::T1, xargs::Vararg{Any,XN}) where {T1,T2,FUN,XN}
-    #init function values **and grid** on coarse grid
-    buffer.basebuffer.values .= [W(x, xargs...) for x in buffer.basebuffer.grid]
-    buffer.basegrid_∂²W .= [Tensors.hessian(i->W(i,xargs...), x) for x in buffer.basebuffer.grid]
+    lim_reached = Bool(1)
+    ac = deepcopy(adaptivegraham)
+    while lim_reached
+        #init function values **and grid** on coarse grid
+        buffer.basebuffer.grid .= [Tensors.Tensor{2,1}((x,)) for x in range(ac.interval[1],ac.interval[2],length=ac.n_coarse)]
 
-    #construct adpative grid
-    adaptive_1Dgrid!(adaptivegraham, buffer)
+        buffer.basebuffer.values .= [W(x, xargs...) for x in buffer.basebuffer.grid]
+        buffer.basegrid_∂²W .= [Tensors.hessian(i->W(i,xargs...), x) for x in buffer.basebuffer.grid]
+
+        #construct adpative grid
+        _, lim_reached = adaptive_1Dgrid!(ac, buffer)
+        if lim_reached
+#            @warn "lim_reached:  extend interval by 10%. Was  $(ac.interval[2])"
+            ac.interval[2]*=1.1
+ #           println("is now $(ac.interval[2])")
+        end
+    end
+
     #init function values on adaptive grid
     for (i,x) in enumerate(buffer.adaptivebuffer.grid)
         buffer.adaptivebuffer.values[i] = W(x, xargs...)
     end
+
     #convexify
     convexgrid_n = convexify_nondeleting!(buffer.adaptivebuffer.grid,buffer.adaptivebuffer.values)
+
     # return W at F
     id⁺ = findfirst(x -> x >= F, @view(buffer.adaptivebuffer.grid[1:convexgrid_n]))
     id⁻ = findlast(x -> x <= F,  @view(buffer.adaptivebuffer.grid[1:convexgrid_n]))
+
     # reorder below to be agnostic w.r.t. tension and compression
     support_points = [buffer.adaptivebuffer.grid[id⁺],buffer.adaptivebuffer.grid[id⁻]] #F⁺ F⁻ assumption
     values_support_points = [buffer.adaptivebuffer.values[id⁺],buffer.adaptivebuffer.values[id⁻]] # W⁺ W⁻ assumption
@@ -203,7 +218,7 @@ end
             return  F⁺⁻
         end
 
-Based on any grid `ac_buffer.basebuffer.grid` and coresponding function values `ac_buffer.basebuffer.values` and 
+Based on any grid `ac_buffer.basebuffer.grid` and coresponding function values `ac_buffer.basebuffer.values` and
 its second derivative `ac_buffer.basegrid_∂²W`, a
 set of points of interest `F⁺⁻` will be determined. Based on this set of points and
 different parameters stored in `ac`
@@ -219,10 +234,9 @@ as points of interest as well (only if step size at this point is greater than
 function adaptive_1Dgrid!(ac::AdaptiveGrahamScan, ac_buffer::AdaptiveConvexificationBuffer1D{T1,T2,T3}) where {T1,T2,T3}
     Fₕₑₛ = check_hessian(ac, ac_buffer)
     Fₛₗₚ,lim_reached = check_slope(ac_buffer)
-    lim_reached ? error("limit reached") : nothing
     Fᵢ = combine(Fₛₗₚ, Fₕₑₛ, ac)
     discretize_interval(ac_buffer.adaptivebuffer.grid, Fᵢ, ac)
-    return Fᵢ
+    return Fᵢ, lim_reached
 end
 
 function check_hessian(∂²W::Vector{T2}, F::Vector{T1}, params::AdaptiveGrahamScan) where {T1,T2}

@@ -177,7 +177,7 @@ end
 
 @testset "Adaptive Convexification" begin
     ac = AdaptiveGrahamScan(
-            interval=(0.001,5.0),
+            interval=[0.001,5.0],
             n_coarse=50,
             n_adaptive=165,
             exponent=5,
