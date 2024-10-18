@@ -105,9 +105,10 @@ end
 Function that implements the adaptive Graham's scan convexification without deletion in $\mathcal{O}(N)$.
 """
 function convexify(adaptivegraham::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::FUN, F::T1, xargs::Vararg{Any,XN}) where {T1,T2,FUN,XN}
-    lim_reached = Bool(1)
+    r_lim = Bool(1)
+    l_lim = Bool(0)
     ac = deepcopy(adaptivegraham)
-    while lim_reached
+    while r_lim
         #init function values **and grid** on coarse grid
         buffer.basebuffer.grid .= [Tensors.Tensor{2,1}((x,)) for x in range(ac.interval[1],ac.interval[2],length=ac.n_coarse)]
 
@@ -115,11 +116,13 @@ function convexify(adaptivegraham::AdaptiveGrahamScan, buffer::AdaptiveConvexifi
         buffer.basegrid_∂²W .= [Tensors.hessian(i->W(i,xargs...), x) for x in buffer.basebuffer.grid]
 
         #construct adpative grid
-        _, lim_reached = adaptive_1Dgrid!(ac, buffer)
-        if lim_reached
-#            @warn "lim_reached:  extend interval by 10%. Was  $(ac.interval[2])"
-            ac.interval[2]*=1.1
+        _Fi, l_lim, r_lim = adaptive_1Dgrid!(ac, buffer)
+        if r_lim
+            @warn "intervals = $(_Fi). r_lim:  extend interval by 50%. Was  $(ac.interval[2])"
+            ac.interval[2]*=1.5
  #           println("is now $(ac.interval[2])")
+        elseif l_lim
+            @warn "intervals = $(_Fi). l_lim"
         end
     end
 
@@ -233,10 +236,10 @@ as points of interest as well (only if step size at this point is greater than
 """
 function adaptive_1Dgrid!(ac::AdaptiveGrahamScan, ac_buffer::AdaptiveConvexificationBuffer1D{T1,T2,T3}) where {T1,T2,T3}
     Fₕₑₛ = check_hessian(ac, ac_buffer)
-    Fₛₗₚ,lim_reached = check_slope(ac_buffer)
+    Fₛₗₚ,l_lim, r_lim = check_slope(ac_buffer)
     Fᵢ = combine(Fₛₗₚ, Fₕₑₛ, ac)
     discretize_interval(ac_buffer.adaptivebuffer.grid, Fᵢ, ac)
-    return Fᵢ, lim_reached
+    return Fᵢ, l_lim, r_lim
 end
 
 function check_hessian(∂²W::Vector{T2}, F::Vector{T1}, params::AdaptiveGrahamScan) where {T1,T2}
@@ -270,7 +273,7 @@ function check_slope(F::Vector{T2}, W::Vector{T1}) where {T2,T1}
         i<length(F) && (mask[i]==1) && (mask[i+1]==0) && push!(F_info,(F[i],zero(F[i])))
     end
 
-    return F_info, mask[2]==0||mask[end-1]==0
+    return F_info, mask[2]==0, mask[end-1]==0
 end
 
 function _get_rel_pos(F::T, F_int::Tuple{T,T}) where {T}
