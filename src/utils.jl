@@ -28,6 +28,25 @@ struct AdaptiveConvexificationBuffer1D{T1,T2,T3} <: AbstractConvexificationBuffe
     basegrid_∂²W::Vector{T3}
 end
 
+@doc raw"""
+"""
+function save_buffer(buf::AdaptiveConvexificationBuffer1D,Fm,Fp,Wm,Wp,path::String;filename::String="")
+    n_coarse = length(buf.basebuffer.grid)
+    n_fine = length(buf.adaptivebuffer.grid)
+    filename = (filename == "") ? "ncoarse_$(n_coarse)_nadap_$(n_fine).jld2" : filename
+    if !isfile(path*filename)
+        JLD2.jldsave(path*filename,
+                c_grid=getindex.(buf.basebuffer.grid,1),
+                c_val=buf.basebuffer.values,
+                c_derivative=getindex.(buf.basegrid_∂²W,1),
+                f_grid=getindex.(buf.adaptivebuffer.grid,1),
+                f_val=buf.adaptivebuffer.values,
+                Fp=Fp[1],Fm=Fm[1],Wp=Wp,Wm=Wm)
+    else
+#        print("file is already there")
+    end
+end
+
 # type piracy
 Base.isless(a::Tensors.Tensor{2,1,T,1}, b::Tensors.Tensor{2,1,T,1}) where T = a[1] < b[1]
 Base.isless(a::Tensors.Tensor{4,1,T,1}, b::Tensors.Tensor{4,1,T,1}) where T = a[1] < b[1]

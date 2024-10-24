@@ -108,7 +108,12 @@ function convexify(adaptivegraham::AdaptiveGrahamScan, buffer::AdaptiveConvexifi
     r_lim = Bool(1)
     l_lim = Bool(0)
     ac = deepcopy(adaptivegraham)
+    cnt = 0
     while r_lim
+        cnt+=1
+        if cnt > 3
+            error()
+        end
         #init function values **and grid** on coarse grid
         buffer.basebuffer.grid .= [Tensors.Tensor{2,1}((x,)) for x in range(ac.interval[1],ac.interval[2],length=ac.n_coarse)]
 
@@ -116,13 +121,13 @@ function convexify(adaptivegraham::AdaptiveGrahamScan, buffer::AdaptiveConvexifi
         buffer.basegrid_∂²W .= [Tensors.hessian(i->W(i,xargs...), x) for x in buffer.basebuffer.grid]
 
         #construct adpative grid
-        _Fi, l_lim, r_lim = adaptive_1Dgrid!(ac, buffer)
+        _Fi, l_lim, r_lim = adaptive_1Dgrid!(ac, buffer,F)
         if r_lim
-            @warn "intervals = $(_Fi). r_lim:  extend interval by 50%. Was  $(ac.interval[2])"
+            #@warn "F_info = $(getindex.(_Fi,1)). r_lim:  extend interval by 50%. Was  $(ac.interval[2]). extensioncnt=$(cnt)"
             ac.interval[2]*=1.5
  #           println("is now $(ac.interval[2])")
         elseif l_lim
-            @warn "intervals = $(_Fi). l_lim"
+            @warn "F_info = $(getindex.(_Fi,1)). l_lim"
         end
     end
 
@@ -138,11 +143,21 @@ function convexify(adaptivegraham::AdaptiveGrahamScan, buffer::AdaptiveConvexifi
     id⁺ = findfirst(x -> x >= F, @view(buffer.adaptivebuffer.grid[1:convexgrid_n]))
     id⁻ = findlast(x -> x <= F,  @view(buffer.adaptivebuffer.grid[1:convexgrid_n]))
 
+
+
     # reorder below to be agnostic w.r.t. tension and compression
     support_points = [buffer.adaptivebuffer.grid[id⁺],buffer.adaptivebuffer.grid[id⁻]] #F⁺ F⁻ assumption
     values_support_points = [buffer.adaptivebuffer.values[id⁺],buffer.adaptivebuffer.values[id⁻]] # W⁺ W⁻ assumption
     _perm = sortperm(values_support_points)
+
+#    save_buffer(buffer,support_points[_perm]...,values_support_points[_perm]... ,"/home/jmelchior/Dokumente/repos/convexified-damage/data/simulations/calibration/1D/reconvexify/temp/";filename="F_$(round(F[1];sigdigits=4))_ncoarse_$(ac.n_coarse)_nadap_$(ac.n_adaptive).jld2")
+
+
     W_conv = values_support_points[_perm[1]] + ((values_support_points[_perm[2]] - values_support_points[_perm[1]])/(support_points[_perm[2]][1] - support_points[_perm[1]][1]))*(F[1] - support_points[_perm[1]][1])
+
+#P = ((values_support_points[_perm[2]] - values_support_points[_perm[1]])/(support_points[_perm[2]][1] - support_points[_perm[1]][1]))
+
+#print("F: $(round(F[1];sigdigits=4)) \t F-: $(round(support_points[_perm[1]][1];sigdigits=5)) \t F+: $(round(support_points[_perm[2]][1];sigdigits=5)) \t W-: $(round(values_support_points[_perm[1]][1];digits=7)) \t W+: $(round(values_support_points[_perm[2]][1];digits=7)) \t W_c: $(round(W_conv;digits=7)) \t P_s: $(round(P[1];sigdigits=5))")
     return W_conv, support_points[_perm[2]], support_points[_perm[1]]
 end
 
@@ -234,9 +249,9 @@ points of non-convex subintervals will be stored. Additionally all minima of ∂
 as points of interest as well (only if step size at this point is greater than
 `ac.max_step_hessian`).
 """
-function adaptive_1Dgrid!(ac::AdaptiveGrahamScan, ac_buffer::AdaptiveConvexificationBuffer1D{T1,T2,T3}) where {T1,T2,T3}
+function adaptive_1Dgrid!(ac::AdaptiveGrahamScan, ac_buffer::AdaptiveConvexificationBuffer1D{T1,T2,T3},F::T) where {T1,T2,T3,T}
     Fₕₑₛ = check_hessian(ac, ac_buffer)
-    Fₛₗₚ,l_lim, r_lim = check_slope(ac_buffer)
+    Fₛₗₚ,l_lim, r_lim = check_slope(ac_buffer,F)
     Fᵢ = combine(Fₛₗₚ, Fₕₑₛ, ac)
     discretize_interval(ac_buffer.adaptivebuffer.grid, Fᵢ, ac)
     return Fᵢ, l_lim, r_lim
@@ -257,11 +272,11 @@ function check_hessian(params::AdaptiveGrahamScan, ac_buffer::AdaptiveConvexific
     return check_hessian(ac_buffer.basegrid_∂²W, ac_buffer.basebuffer.grid, params)
 end
 
-function check_slope(ac_buffer::AdaptiveConvexificationBuffer1D)
-    return check_slope(ac_buffer.basebuffer.grid,ac_buffer.basebuffer.values)
+function check_slope(ac_buffer::AdaptiveConvexificationBuffer1D,F)
+    return check_slope(ac_buffer.basebuffer.grid,ac_buffer.basebuffer.values,F)
 end
 
-function check_slope(F::Vector{T2}, W::Vector{T1}) where {T2,T1}
+function check_slope(F::Vector{T2}, W::Vector{T1},F_eval::T) where {T2,T1,T}
     # determin convex hull
     mask = ones(Bool,length(F))
     convexify_nonediting!(F,W,mask)
@@ -273,7 +288,11 @@ function check_slope(F::Vector{T2}, W::Vector{T1}) where {T2,T1}
         i<length(F) && (mask[i]==1) && (mask[i+1]==0) && push!(F_info,(F[i],zero(F[i])))
     end
 
-    return F_info, mask[2]==0, mask[end-1]==0
+    # only throw error if F is within non-convex region
+    r_lim = (mask[end-1]==0) && (F_eval>F_info[end][1])
+    l_lim = (mask[2]==0) && (F_eval<F_info[1][2])
+
+    return F_info, l_lim, r_lim
 end
 
 function _get_rel_pos(F::T, F_int::Tuple{T,T}) where {T}
