@@ -74,54 +74,86 @@ struct that stores all relevant information for adaptive convexification.
 # Constructor
     AdaptiveGrahamScan(interval; n_coarse=50, n_adaptive=115, exponent=5, max_step_hessian=0.05, radius=3, min_step=0.03, d_hes=0.4)
 """
-Base.@kwdef struct AdaptiveGrahamScan <: AbstractConvexification
-    interval::Vector{Float64}
-    n_coarse::Int64 = 50
-    n_adaptive::Int64 = 115
-    exponent::Int64 = 5
-    max_step_hessian::Float64 = 0.05     # minimale Schrittweite für die Hesse berücksichtigt wird
-    radius::Float64 = 3
-    min_step::Float64 = 0.03
-    d_hes::Number=0.4                         # distance
-#    AdaptiveGrahamScan(int, bg, np, exp, dis, ighes, mpi, rad, stp, frce, d_hes) = d_hes>=0.5 ? error("assigned value too large d=$(d)>=0.5") : new(int, bg, np, exp, dis, ighes, mpi, rad, stp, frce, d_hes)
-#    end
+struct AdaptiveGrahamScan <: AbstractConvexification
+    interval_init::Tuple{Float64,Float64}
+    interval::Vector{Float64}                   # current interval
+    n_subintervals::Int64
+    h_coarse::Float64
+    h_adaptive::Float64
+    n_adaptive_per_subinterval::Int64
+    exponent::Int64
+    max_step_hessian::Float64                   # minimale Schrittweite für die Hesse berücksichtigt wird
+    radius::Float64
+    min_step::Float64
+    d_hes::Number                               # distance
+    function AdaptiveGrahamScan(;
+                        interval_init,
+                        #interval,
+                        n_subintervals = 1,
+                        h_coarse = 0.1,
+                        h_adaptive = 0.04,
+                        n_adaptive_per_subinterval = nothing,
+                        exponent = 5,
+                        max_step_hessian = 0.05,
+                        radius = 3,
+                        min_step = 0.02,
+                        d_hes = 0.4,
+                      )
+        d_hes>=0.5 ? error("assigned value too large d_hes = $(d_hes) >= 0.5") : nothing
+        interval = collect(interval_init)
+        n_ada_subint = n_adaptive_per_subinterval == nothing ? Int(floor(floor((interval[2]-interval[1])/h_adaptive)/n_subintervals)) : n_adaptive_per_subinterval
+        h_adaptive < min_step ? error("'h_adaptive' cannot be smaller that 'min_step'") : nothing
+        (interval[2]-interval[1])/min_step < n_subintervals*n_ada_subint ? error("number of requested points per subinterval 'n_adaptive_per_subinterval' = $(n_ada_subint) violates minimal step size 'min_step' = $(min_step). Decrease 'n_adaptive_per_subinterval' (<= $((interval[2]-interval[1])/(min_step*n_subintervals))) or 'min_step' (<=$((interval[2]-interval[1])/(n_subintervals*n_ada_subint)))") : nothing
+        new(interval_init,interval,n_subintervals,h_coarse,h_adaptive,n_ada_subint,exponent,max_step_hessian,radius,min_step,d_hes)
+    end
 end
 
 δ(s::AdaptiveGrahamScan) = step(range(s.interval[1],s.interval[2],length=s.n_adaptive))
 
 function build_buffer(ac::AdaptiveGrahamScan)
-    basegrid_F = [Tensors.Tensor{2,1}((x,)) for x in range(ac.interval[1],ac.interval[2],length=ac.n_coarse)]
-    basegrid_W = zeros(Float64,ac.n_coarse)
-    basegrid_∂²W = [Tensors.Tensor{4,1}((x,)) for x in zeros(Float64,ac.n_coarse)]
-    adaptivegrid_F = [Tensors.Tensor{2,1}((x,)) for x in zeros(Float64,ac.n_adaptive)]
-    adaptivegrid_W = zeros(Float64,ac.n_adaptive)
+    # correction of step size, to ensure both borders are included
+    num_coarse = Int(ceil((ac.interval[2]-ac.interval[1])/ac.h_coarse))
+    basegrid_F = [Tensors.Tensor{2,1}((x,)) for x in range(ac.interval[1],ac.interval[2],length=num_coarse)]
+    basegrid_W = zeros(Float64,num_coarse)
+    basegrid_∂²W = [Tensors.Tensor{4,1}((x,)) for x in zeros(Float64,num_coarse)]
+    # calculate number of adaptive grid points
+    n_ada = max(ac.n_subintervals*ac.n_adaptive_per_subinterval,Int(floor((ac.interval[2]-ac.interval[1])/ac.h_adaptive)))
+    adaptivegrid_F = [Tensors.Tensor{2,1}((x,)) for x in zeros(Float64,n_ada)]
+    adaptivegrid_W = zeros(Float64,n_ada)
+    # initialize sub buffers
     basebuffer = ConvexificationBuffer1D(basegrid_F,basegrid_W)
     adaptivebuffer = ConvexificationBuffer1D(adaptivegrid_F,adaptivegrid_W)
     return AdaptiveConvexificationBuffer1D(basebuffer,adaptivebuffer,basegrid_∂²W)
+end
+
+function init_coarsebuffer!(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::FUN, xargs::Vararg{Any,XN}) where {T1,T2,FUN,XN}
+        buffer.basebuffer.grid .= [Tensors.Tensor{2,1}((x,)) for x in range(ac.interval[1],ac.interval[2],length=length(buffer.basebuffer.grid))]
+
+        buffer.basebuffer.values .= [W(x, xargs...) for x in buffer.basebuffer.grid]
+        buffer.basegrid_∂²W .= [Tensors.hessian(i->W(i,xargs...), x) for x in buffer.basebuffer.grid]
+end
+
+function resize_buffer!()
 end
 
 @doc raw"""
     convexify(adaptivegraham::AdaptiveGrahamScan{T2}, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::FUN, F::T1, xargs::Vararg{Any,XN}) where {T1,T2,FUN,XN}  -> W_convex::Float64, F⁻::Tensor{2,1}, F⁺::Tensor{2,1}
 Function that implements the adaptive Graham's scan convexification without deletion in $\mathcal{O}(N)$.
 """
-function convexify(adaptivegraham::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::FUN, F::T1, xargs::Vararg{Any,XN}) where {T1,T2,FUN,XN}
-    r_lim = Bool(1)
+function convexify(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::FUN, F::T1, xargs::Vararg{Any,XN}) where {T1,T2,FUN,XN}
+    r_lim = Bool(0)
     l_lim = Bool(0)
-    ac = deepcopy(adaptivegraham)
-    cnt = 0
-    while r_lim
-        cnt+=1
-        if cnt > 3
-            error()
-        end
+    while r_lim && l_lim
         #init function values **and grid** on coarse grid
-        buffer.basebuffer.grid .= [Tensors.Tensor{2,1}((x,)) for x in range(ac.interval[1],ac.interval[2],length=ac.n_coarse)]
+        init_coarsebuffer!(buffer)
+        # inspect coarse buffer
+        Fₛₗₚ, l_lim, r_lim = check_slope(buffer,F)
 
-        buffer.basebuffer.values .= [W(x, xargs...) for x in buffer.basebuffer.grid]
-        buffer.basegrid_∂²W .= [Tensors.hessian(i->W(i,xargs...), x) for x in buffer.basebuffer.grid]
+        Fₕₑₛ = check_hessian(ac, buffer)
+        Fᵢ = combine(Fₛₗₚ, Fₕₑₛ, ac)
 
         #construct adpative grid
-        _Fi, l_lim, r_lim = adaptive_1Dgrid!(ac, buffer,F)
+#        _Fi, l_lim, r_lim = adaptive_1Dgrid!(ac, buffer,F)
         if r_lim
             #@warn "F_info = $(getindex.(_Fi,1)). r_lim:  extend interval by 50%. Was  $(ac.interval[2]). extensioncnt=$(cnt)"
             ac.interval[2]*=1.5
@@ -155,9 +187,6 @@ function convexify(adaptivegraham::AdaptiveGrahamScan, buffer::AdaptiveConvexifi
 
     W_conv = values_support_points[_perm[1]] + ((values_support_points[_perm[2]] - values_support_points[_perm[1]])/(support_points[_perm[2]][1] - support_points[_perm[1]][1]))*(F[1] - support_points[_perm[1]][1])
 
-#P = ((values_support_points[_perm[2]] - values_support_points[_perm[1]])/(support_points[_perm[2]][1] - support_points[_perm[1]][1]))
-
-#print("F: $(round(F[1];sigdigits=4)) \t F-: $(round(support_points[_perm[1]][1];sigdigits=5)) \t F+: $(round(support_points[_perm[2]][1];sigdigits=5)) \t W-: $(round(values_support_points[_perm[1]][1];digits=7)) \t W+: $(round(values_support_points[_perm[2]][1];digits=7)) \t W_c: $(round(W_conv;digits=7)) \t P_s: $(round(P[1];sigdigits=5))")
     return W_conv, support_points[_perm[2]], support_points[_perm[1]]
 end
 
@@ -251,9 +280,17 @@ as points of interest as well (only if step size at this point is greater than
 """
 function adaptive_1Dgrid!(ac::AdaptiveGrahamScan, ac_buffer::AdaptiveConvexificationBuffer1D{T1,T2,T3},F::T) where {T1,T2,T3,T}
     Fₕₑₛ = check_hessian(ac, ac_buffer)
-    Fₛₗₚ,l_lim, r_lim = check_slope(ac_buffer,F)
+    Fₛₗₚ, l_lim, r_lim = check_slope(ac_buffer,F)
     Fᵢ = combine(Fₛₗₚ, Fₕₑₛ, ac)
     discretize_interval(ac_buffer.adaptivebuffer.grid, Fᵢ, ac)
+    return Fᵢ, l_lim, r_lim
+end
+
+function inspect_coarse(ac::AdaptiveGrahamScan, ac_buffer::AdaptiveConvexificationBuffer1D{T1,T2,T3},F::T) where {T1,T2,T3,T}
+    Fₕₑₛ = check_hessian(ac, ac_buffer)
+    Fₛₗₚ, l_lim, r_lim = check_slope(ac_buffer,F)
+
+    Fᵢ = combine(Fₛₗₚ, Fₕₑₛ, ac)
     return Fᵢ, l_lim, r_lim
 end
 
