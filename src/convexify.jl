@@ -131,15 +131,15 @@ end
 
 function validate_buffer(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D)
     n_c,n_a = get_buffer_sizes(ac::AdaptiveGrahamScan)
-println("n_c,n_a = $(n_c), $(n_a)")
+#println("n_c,n_a = $(n_c), $(n_a)")
     !(length(buffer.basebuffer.grid) == length(buffer.basebuffer.values) == length(buffer.basegrid_∂²W) == n_c) && error("inconsistent coarse buffer sizes")
     !(length(buffer.adaptivebuffer.grid) == length(buffer.adaptivebuffer.values) == n_a) && error("inconsistent adaptive buffer sizes")
 end
 
 function init_coarsebuffer!(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::FUN, xargs::Vararg{Any,XN}) where {T1,T2,FUN,XN}
         validate_buffer(ac,buffer)
-println(length(buffer.basebuffer.grid))
-println(length(buffer.adaptivebuffer.grid))
+#println(length(buffer.basebuffer.grid))
+#println(length(buffer.adaptivebuffer.grid))
         buffer.basebuffer.grid .= [Tensors.Tensor{2,1}((x,)) for x in range(ac.interval[1],ac.interval[2],length=length(buffer.basebuffer.grid))]
         buffer.basebuffer.values .= [W(x, xargs...) for x in buffer.basebuffer.grid]
         buffer.basegrid_∂²W .= [Tensors.hessian(i->W(i,xargs...), x) for x in buffer.basebuffer.grid]
@@ -148,22 +148,22 @@ end
 function adapt_interval!(ac::AdaptiveGrahamScan,Fᵢ::Vector{Tuple{T,T}},F::T) where {T}
     # extend intervall if F is within non_convex region that includes intervall limit
     int_init = copy(ac.interval)
-    l_lim = ac.interval[1]==Fᵢ[1][1][1] && (F<Fᵢ[1][2])
-    r_lim = ac.interval[2]==Fᵢ[end][2][1] && (F>Fᵢ[end][1])
+    l_lim = !isempty(Fᵢ) && ac.interval[1]==Fᵢ[1][1][1] && (F<Fᵢ[1][2])
+    r_lim = !isempty(Fᵢ) && ac.interval[2]==Fᵢ[end][2][1] && (F>Fᵢ[end][1])
     if l_lim || F[1] <= (1+ac.adaption_rate)*ac.interval[1]
-        println("case: 1")
+        #println("case: 1")
         ac.interval[1] = (1-ac.adaption_rate)*ac.interval[1]
     elseif r_lim || F[1] >= (1-ac.adaption_rate)*ac.interval[2]
-        println("2")
+        #println("2")
         ac.interval[2] = (1+ac.adaption_rate)*ac.interval[2]
     # shorten intervall if "orphaned" non-convexity can be identified
     elseif length(Fᵢ) >= 2
-        println("3")
+        #println("3")
         if F < Fᵢ[end-1][1]
-            println("4")
+            println("\n\n\n4\n\n\n")
             ac.interval[2] = (Fᵢ[end-1][2][1]+Fᵢ[end][1][1])/2
         elseif F > Fᵢ[2][2]
-            println("5")
+            println("\n\n\n5\n\n\n")
             ac.interval[1] = (Fᵢ[1][2][1]+Fᵢ[2][1][1])/2
         end
     end
@@ -178,7 +178,7 @@ end
 
 function resize_buffer!(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D{T1,T2,T3}) where {T1,T2,T3}
     num_coarse_desired, num_ada_desired = get_buffer_sizes(ac)
-println("resize to: $(get_buffer_sizes(ac))")
+#println("resize to: $(get_buffer_sizes(ac))")
     num_coarse_current = length(buffer.basebuffer.grid)
     num_ada_current = length(buffer.adaptivebuffer.grid)
     if num_coarse_desired > num_coarse_current
@@ -220,13 +220,13 @@ end
 Function that implements the adaptive Graham's scan convexification without deletion in $\mathcal{O}(N)$.
 """
 function convexify(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::FUN, F::T1, xargs::Vararg{Any,XN}) where {T1,T2,FUN,XN}
-println("hi")
+#println("hi")
     cnt = 0
     has_changed = true
     Fᵢ = Vector{T1}()
     while has_changed
-        cnt<=100 ? cnt+=1 : error("apropriate buffer size cannot be determined")
-println("iteration $(cnt)")
+        cnt<=100 ? cnt+=1 : begin (@warn "\n\n\n\nran into counter limit\n\n\n\n"); error("apropriate buffer size cannot be determined"); end
+#println("iteration $(cnt)")
         #init function values **and grid** on coarse grid
         init_coarsebuffer!(ac, buffer, W, xargs...)
         # inspect coarse buffer
@@ -234,10 +234,10 @@ println("iteration $(cnt)")
         Fₛₗₚ = check_slope(buffer,F)
         Fᵢ, Fᵢₜ = combine(Fₛₗₚ, Fₕₑₛ, ac)
         has_changed = update_n_subintervals!(ac,Fᵢ) || adapt_interval!(ac,Fᵢₜ,F)
-println(ac.n_subintervals)
+#println(ac.n_subintervals)
         has_changed && resize_buffer!(ac,buffer)
     end
-println("test")
+#println("test")
     #init function values on adaptive grid
     init_adaptivebuffer!(ac,buffer,Fᵢ,W,xargs...)
 
@@ -460,8 +460,8 @@ function discretize_interval!(Fₒᵤₜ::Array{T}, F_info::Array{T}, ac::Adapti
     # calculate number of gridpoints per interval
     pnts_perint = Array{Int64}(undef,length(F_info)-1)
     distribute_gridpoints!(pnts_perint, F_info, ac)
-println(get_buffer_sizes(ac))
-println(length(Fₒᵤₜ))
+#println(get_buffer_sizes(ac))
+#println(length(Fₒᵤₜ))
     # calculate actual position of each gridpoint
     for i=1:length(F_info)-1
         P = Polynomial(F_info[i],F_info[i+1]-F_info[i], pnts_perint[i], ac)
