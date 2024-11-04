@@ -80,7 +80,8 @@ struct AdaptiveGrahamScan <: AbstractConvexification
     interval::Vector{Float64}                   # current interval
     adaption_rate::Float64
     n_subintervals::Vector{Int64}
-    h_coarse::Float64
+    n_coarse::Int64
+#    h_coarse::Float64
     h_adaptive::Float64
     n_adaptive_per_subinterval::Int64
     exponent::Int64
@@ -93,7 +94,8 @@ struct AdaptiveGrahamScan <: AbstractConvexification
                         #interval,
                         adaption_rate=0.1,
                         n_subintervals = 1,
-                        h_coarse = 0.1,
+                        n_coarse = 1000,
+#                        h_coarse = 0.1,
                         h_adaptive = 0.04,
                         n_adaptive_per_subinterval = nothing,
                         exponent = 5,
@@ -108,7 +110,7 @@ struct AdaptiveGrahamScan <: AbstractConvexification
         n_ada_subint = n_adaptive_per_subinterval == nothing ? Int(floor(floor((interval[2]-interval[1])/h_adaptive)/n_subintervals)) : n_adaptive_per_subinterval
         h_adaptive < min_step ? error("'h_adaptive' cannot be smaller that 'min_step'") : nothing
         (interval[2]-interval[1])/min_step < n_subintervals*n_ada_subint ? error("number of requested points per subinterval 'n_adaptive_per_subinterval' = $(n_ada_subint) violates minimal step size 'min_step' = $(min_step). Decrease 'n_adaptive_per_subinterval' (<= $((interval[2]-interval[1])/(min_step*n_subintervals))) or 'min_step' (<=$((interval[2]-interval[1])/(n_subintervals*n_ada_subint)))") : nothing
-        new(interval_init,interval,adaption_rate,[Int(n_subintervals)],h_coarse,h_adaptive,n_ada_subint,exponent,max_step_hessian,radius,min_step,d_hes)
+        new(interval_init,interval,adaption_rate,[Int(n_subintervals)],n_coarse,h_adaptive,n_ada_subint,exponent,max_step_hessian,radius,min_step,d_hes)
     end
 end
 
@@ -129,15 +131,18 @@ function build_buffer(ac::AdaptiveGrahamScan)
     return AdaptiveConvexificationBuffer1D(basebuffer,adaptivebuffer,basegrid_∂²W)
 end
 
-function validate_buffer(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D)
-    n_c,n_a = get_buffer_sizes(ac::AdaptiveGrahamScan)
-#println("n_c,n_a = $(n_c), $(n_a)")
+function validate_coarse_buffer(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D)
+    n_c,_ = get_buffer_sizes(ac::AdaptiveGrahamScan)
     !(length(buffer.basebuffer.grid) == length(buffer.basebuffer.values) == length(buffer.basegrid_∂²W) == n_c) && error("inconsistent coarse buffer sizes")
-    !(length(buffer.adaptivebuffer.grid) == length(buffer.adaptivebuffer.values) == n_a) && error("inconsistent adaptive buffer sizes")
+end
+
+function validate_adaptive_buffer(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D)
+    _,n_a = get_buffer_sizes(ac::AdaptiveGrahamScan)
+    !(length(buffer.adaptivebuffer.grid) == length(buffer.adaptivebuffer.values) == n_a) && error("cnt=$(cnt) \tinconsistent adaptive buffer sizes")
 end
 
 function init_coarsebuffer!(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::FUN, xargs::Vararg{Any,XN}) where {T1,T2,FUN,XN}
-        validate_buffer(ac,buffer)
+        validate_coarse_buffer(ac,buffer)
 #println(length(buffer.basebuffer.grid))
 #println(length(buffer.adaptivebuffer.grid))
         buffer.basebuffer.grid .= [Tensors.Tensor{2,1}((x,)) for x in range(ac.interval[1],ac.interval[2],length=length(buffer.basebuffer.grid))]
@@ -148,39 +153,55 @@ end
 function adapt_interval!(ac::AdaptiveGrahamScan,Fᵢ::Vector{Tuple{T,T}},F::T) where {T}
     # extend intervall if F is within non_convex region that includes intervall limit
     int_init = copy(ac.interval)
-    l_lim = !isempty(Fᵢ) && ac.interval[1]==Fᵢ[1][1][1] && (F<Fᵢ[1][2])
-    r_lim = !isempty(Fᵢ) && ac.interval[2]==Fᵢ[end][2][1] && (F>Fᵢ[end][1])
+    h_coarse = (ac.interval[2]-ac.interval[1])/ac.n_coarse
+    l_lim = !isempty(Fᵢ) && ac.interval[1]==Fᵢ[1][1][1] && (F[1]<Fᵢ[1][2][1]+h_coarse)
+    r_lim = !isempty(Fᵢ) && ac.interval[2]==Fᵢ[end][2][1] && (F[1]>Fᵢ[end][1][1]-h_coarse)
     if l_lim || F[1] <= (1+ac.adaption_rate)*ac.interval[1]
-        #println("case: 1")
+ #       println("\t 1: adapt_left (l_lim=$(l_lim) || border=$(F[1] <= (1+ac.adaption_rate)*ac.interval[1]))) ")
         ac.interval[1] = (1-ac.adaption_rate)*ac.interval[1]
     elseif r_lim || F[1] >= (1-ac.adaption_rate)*ac.interval[2]
-        #println("2")
+ #       println("\t 2: adapt_right (r_lim=$(r_lim) || border=$(F[1] >= (1-ac.adaption_rate)*ac.interval[2]))")
         ac.interval[2] = (1+ac.adaption_rate)*ac.interval[2]
     # shorten intervall if "orphaned" non-convexity can be identified
-    elseif length(Fᵢ) >= 2
-        #println("3")
-        if F < Fᵢ[end-1][1]
-            println("\n\n\n4\n\n\n")
-            ac.interval[2] = (Fᵢ[end-1][2][1]+Fᵢ[end][1][1])/2
-        elseif F > Fᵢ[2][2]
-            println("\n\n\n5\n\n\n")
-            ac.interval[1] = (Fᵢ[1][2][1]+Fᵢ[2][1][1])/2
-        end
+#    elseif length(Fᵢ) >= 2
+#        print("\t 3: length(Fᵢ) >= 2 ")
+#        if F < Fᵢ[end-1][1]
+#            println("\t4: short_right \t len_F_i=$(length(Fᵢ)) \tac.int=$(ac.interval)")
+#            ac.interval[2] = (Fᵢ[end-1][2][1]+Fᵢ[end][1][1])/2
+#        elseif F > Fᵢ[2][2]
+#            println("\t5: short_left \t len_F_i=$(length(Fᵢ)) \tac.int=$(ac.interval)")
+#            ac.interval[1] = (Fᵢ[1][2][1]+Fᵢ[2][1][1])/2
+#        else
+#            println("\ti did nothing")
+#        end
     end
     return int_init!=ac.interval
 end
 
 function get_buffer_sizes(ac::AdaptiveGrahamScan)
-    n_c = Int(ceil((ac.interval[2]-ac.interval[1])/ac.h_coarse))
-    n_a = max(ac.n_subintervals[1]*ac.n_adaptive_per_subinterval,Int(floor((ac.interval[2]-ac.interval[1])/ac.h_adaptive)))
+    n_c = ac.n_coarse
+#    n_c = Int(ceil((ac.interval[2]-ac.interval[1])/ac.h_coarse))
+    n_a = min( max(ac.n_subintervals[1]*ac.n_adaptive_per_subinterval,Int(floor((ac.interval[2]-ac.interval[1])/ac.h_adaptive))), Int(floor((ac.interval[2]-ac.interval[1])/ac.min_step))-ac.n_subintervals[1] )
     return n_c,n_a
 end
 
-function resize_buffer!(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D{T1,T2,T3}) where {T1,T2,T3}
-    num_coarse_desired, num_ada_desired = get_buffer_sizes(ac)
-#println("resize to: $(get_buffer_sizes(ac))")
-    num_coarse_current = length(buffer.basebuffer.grid)
+
+function resize_adaptive_buffer!(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D{T1,T2,T3}) where {T1,T2,T3}
+    _ , num_ada_desired = get_buffer_sizes(ac)
     num_ada_current = length(buffer.adaptivebuffer.grid)
+    if num_ada_desired > num_ada_current
+        push!(buffer.adaptivebuffer.grid, zeros(T1,num_ada_desired-num_ada_current)...)
+        push!(buffer.adaptivebuffer.values, zeros(T2,num_ada_desired-num_ada_current)...)
+    elseif num_ada_desired < num_ada_current
+        deleteat!(buffer.adaptivebuffer.grid, num_ada_desired+1:num_ada_current)
+        deleteat!(buffer.adaptivebuffer.values, num_ada_desired+1:num_ada_current)
+    end
+end
+
+function resize_coarse_buffer!(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D{T1,T2,T3}) where {T1,T2,T3}
+    num_coarse_desired, _ = get_buffer_sizes(ac)
+    num_coarse_current = length(buffer.basebuffer.grid)
+#println("\tcurrently: num_c_cur=$(num_coarse_current), num_ad_cur=$(num_ada_current) \tresize to: num_co_des=$(num_coarse_desired) num_ad_des=$(num_ada_desired)")
     if num_coarse_desired > num_coarse_current
         push!(buffer.basebuffer.grid, zeros(T1,num_coarse_desired-num_coarse_current)...)
         push!(buffer.basebuffer.values, zeros(T2,num_coarse_desired-num_coarse_current)...)
@@ -190,16 +211,10 @@ function resize_buffer!(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationB
         deleteat!(buffer.basebuffer.values, num_coarse_desired+1:num_coarse_current)
         deleteat!(buffer.basegrid_∂²W, num_coarse_desired+1:num_coarse_current)
     end
-    if num_ada_desired > num_ada_current
-        push!(buffer.adaptivebuffer.grid, zeros(T1,num_ada_desired-num_ada_current)...)
-        push!(buffer.adaptivebuffer.values, zeros(T2,num_ada_desired-num_ada_current)...)
-    elseif num_ada_desired < num_ada_current
-        deleteat!(buffer.adaptivebuffer.grid, num_coarse_desired+1:num_coarse_current)
-        deleteat!(buffer.adaptivebuffer.values, num_coarse_desired+1:num_coarse_current)
-    end
 end
 
 function init_adaptivebuffer!(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D{T1,T2},Fᵢ::Vector{T1}, W::FUN, xargs::Vararg{Any,XN}) where {T1,T2,FUN,XN}
+    validate_adaptive_buffer(ac, buffer)
     discretize_interval!(buffer.adaptivebuffer.grid, Fᵢ, ac)
     for (i,x) in enumerate(buffer.adaptivebuffer.grid)
         buffer.adaptivebuffer.values[i] = W(x, xargs...)
@@ -207,7 +222,7 @@ function init_adaptivebuffer!(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexific
 end
 
 function update_n_subintervals!(ac::AdaptiveGrahamScan,Fᵢ::Vector{T}) where {T}
-    if ac.n_subintervals[1]==length(Fᵢ)-1
+    if ac.n_subintervals[1] == length(Fᵢ)-1
         return false
     else
         ac.n_subintervals[1] = length(Fᵢ)-1
@@ -224,8 +239,21 @@ function convexify(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer
     cnt = 0
     has_changed = true
     Fᵢ = Vector{T1}()
+
+#    t1 = @elapsed begin
     while has_changed
-        cnt<=100 ? cnt+=1 : begin (@warn "\n\n\n\nran into counter limit\n\n\n\n"); error("apropriate buffer size cannot be determined"); end
+        if cnt<=100
+            cnt+=1
+        else
+            init_coarsebuffer!(ac, buffer, W, xargs...)
+            # inspect coarse buffer
+#JLD2.jldsave("test.jl",buffer=buffer,ac=ac)
+            Fₕₑₛ = check_hessian(ac, buffer)
+            Fₛₗₚ = check_slope(buffer,F)
+            Fᵢ, Fᵢₜ = combine(Fₛₗₚ, Fₕₑₛ, ac)
+            @warn "\n\n\n\nran into counter limit \nW = $(W)\n F = $(F)\n F_info=$(Fᵢ)\n ac=$(ac)\n F_slp=$(Fₛₗₚ)\nF_hes=$(Fₕₑₛ)\n\n\n\n";
+            error("apropriate buffer size cannot be determined");
+        end
 #println("iteration $(cnt)")
         #init function values **and grid** on coarse grid
         init_coarsebuffer!(ac, buffer, W, xargs...)
@@ -233,12 +261,16 @@ function convexify(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer
         Fₕₑₛ = check_hessian(ac, buffer)
         Fₛₗₚ = check_slope(buffer,F)
         Fᵢ, Fᵢₜ = combine(Fₛₗₚ, Fₕₑₛ, ac)
-        has_changed = update_n_subintervals!(ac,Fᵢ) || adapt_interval!(ac,Fᵢₜ,F)
-#println(ac.n_subintervals)
-        has_changed && resize_buffer!(ac,buffer)
+
+        has_changed = adapt_interval!(ac,Fᵢₜ,F)
+        has_changed && resize_coarse_buffer!(ac,buffer)
     end
-#println("test")
+ #   end
+
     #init function values on adaptive grid
+ #   t2= @elapsed begin
+    update_n_subintervals!(ac,Fᵢ)
+    resize_adaptive_buffer!(ac,buffer)
     init_adaptivebuffer!(ac,buffer,Fᵢ,W,xargs...)
 
     #convexify
@@ -259,7 +291,8 @@ function convexify(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer
 
 
     W_conv = values_support_points[_perm[1]] + ((values_support_points[_perm[2]] - values_support_points[_perm[1]])/(support_points[_perm[2]][1] - support_points[_perm[1]][1]))*(F[1] - support_points[_perm[1]][1])
-
+  #  end
+#println("coarse_time=$(t1) \t adaptive_time=$(t2)")
     return W_conv, support_points[_perm[2]], support_points[_perm[1]]
 end
 
@@ -490,6 +523,9 @@ function distribute_gridpoints!(pnts_perint::Array{Int}, F_info::Array, ac::Adap
             pnts_perint[ip] = floor(remaining_points/sum(activeint)) + addpoint
         end
     end
+#println(F_info)
+#display(pnts_perint)
+#display(n_adaptive)
     if sum(pnts_perint) != n_adaptive
         all(x->x==0,activeint) ? error("reduce n_adaptive! <- this is not correct anymore! check!!!") : error("algorithm needs closer look here!")
     end
