@@ -28,6 +28,9 @@ struct AdaptiveConvexificationBuffer1D{T1,T2,T3} <: AbstractConvexificationBuffe
     basegrid_∂²W::Vector{T3}
 end
 
+struct NewtonConvexificationBuffer1D <: AbstractConvexificationBuffer
+end
+
 # type piracy
 Base.isless(a::Tensors.Tensor{2,1,T,1}, b::Tensors.Tensor{2,1,T,1}) where T = a[1] < b[1]
 Base.isless(a::Tensors.Tensor{4,1,T,1}, b::Tensors.Tensor{4,1,T,1}) where T = a[1] < b[1]
