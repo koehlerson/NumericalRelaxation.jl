@@ -509,7 +509,7 @@ function iterator(i, mask; dir=1)
     dir in [1, -1] ? nothing : error("search direction must be either positive (1) or negative (-1)")
     ((i>=1) && (i<=length(mask))) ? nothing : error("tried to access vector entry at position "*string(i)*". Must lie between 1 and "*string(length(mask))*".")
     ~(mask[1] == 0) ? nothing : error("first entry of mask is not supposed to be set to false")
-    ~(mask[end] == 0) ? nothing : error("last entry of mask is not supposed to be set to false")        
+    ~(mask[end] == 0) ? nothing : error("last entry of mask is not supposed to be set to false")
 
     if dir == -1
         id_next = findlast(@view mask[1:(i==1 ? 1 : i-1)])
@@ -1678,7 +1678,6 @@ function convexify(poly_convexification::PolyConvexification, poly_buffer::PolyC
     end
 end
 
-
 @doc raw"""
 Signed singular value polyconvexification using the linear programming approach
 
@@ -1698,4 +1697,33 @@ function convexify(poly_convexification::PolyConvexification, poly_buffer::PolyC
         WpcFδ = Φpcνδ
         return WpcFδ
     end
+end
+
+@doc raw"""
+    convexify_nonediting!(F, W, mask::Vector{Bool})
+Kernel function that implements the actual convexification without editing F and W in $\mathcal{O}(N)$.
+"""
+function convexify_nonediting!(F, W, mask::Vector{Bool})
+    for i in 3:length(F)
+        n = iterator(i,mask;dir=-1)
+        while n >=2 && ~is_convex((F[iterator(n,mask;dir=-1)], W[iterator(n,mask;dir=-1)]),(F[n], W[n]),(F[i], W[i]))
+            mask[n]=0
+            n = iterator(i,mask;dir=-1)
+        end
+    end
+end
+
+function getFplusminus(F::Vector{T2}, W::Vector{T1}) where {T2,T1}
+    # determin convex hull
+    mask = ones(Bool,length(F))
+    convexify_nonediting!(F,W,mask)
+
+    # write non convex intervals into F_info
+    F_info = Vector{Tuple{typeof(F[1]),typeof(F[1])}}()
+    for i in 1:length(F)
+        i>1 && (mask[i-1]==0) && (mask[i]==1) ? (F_info[end]=(F_info[end][1],F[i])) : nothing
+        i<length(F) && (mask[i]==1) && (mask[i+1]==0) && push!(F_info,(F[i],zero(F[i])))
+    end
+
+    return F_info
 end
