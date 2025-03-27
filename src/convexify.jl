@@ -138,7 +138,7 @@ end
 
 function validate_adaptive_buffer(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D)
     _,n_a = get_buffer_sizes(ac::AdaptiveGrahamScan)
-    !(length(buffer.adaptivebuffer.grid) == length(buffer.adaptivebuffer.values) == n_a) && error("cnt=$(cnt) \tinconsistent adaptive buffer sizes")
+    !(length(buffer.adaptivebuffer.grid) == length(buffer.adaptivebuffer.values) == n_a) && error("inconsistent adaptive buffer sizes \n length(grid) = $(length(buffer.adaptivebuffer.grid))\n length(values) = $(length(buffer.adaptivebuffer.values))")
 end
 
 function init_coarsebuffer!(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::FUN, xargs::Vararg{Any,XN}) where {T1,T2,FUN,XN}
@@ -239,8 +239,6 @@ function convexify(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer
     cnt = 0
     has_changed = true
     Fᵢ = Vector{T1}()
-
-#    t1 = @elapsed begin
     while has_changed
         if cnt<=100
             cnt+=1
@@ -254,9 +252,9 @@ function convexify(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer
             @warn "\n\n\n\nran into counter limit \nW = $(W)\n F = $(F)\n F_info=$(Fᵢ)\n ac=$(ac)\n F_slp=$(Fₛₗₚ)\nF_hes=$(Fₕₑₛ)\n\n\n\n";
             error("apropriate buffer size cannot be determined");
         end
-#println("iteration $(cnt)")
         #init function values **and grid** on coarse grid
         init_coarsebuffer!(ac, buffer, W, xargs...)
+
         # inspect coarse buffer
         Fₕₑₛ = check_hessian(ac, buffer)
         Fₛₗₚ = check_slope(buffer,F)
@@ -275,12 +273,9 @@ function convexify(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer
 
     #convexify
     convexgrid_n = convexify_nondeleting!(buffer.adaptivebuffer.grid,buffer.adaptivebuffer.values)
-
     # return W at F
     id⁺ = findfirst(x -> x >= F, @view(buffer.adaptivebuffer.grid[1:convexgrid_n]))
     id⁻ = findlast(x -> x <= F,  @view(buffer.adaptivebuffer.grid[1:convexgrid_n]))
-
-
 
     # reorder below to be agnostic w.r.t. tension and compression
     support_points = [buffer.adaptivebuffer.grid[id⁺],buffer.adaptivebuffer.grid[id⁻]] #F⁺ F⁻ assumption
