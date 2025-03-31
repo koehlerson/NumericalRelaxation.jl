@@ -28,7 +28,10 @@ struct AdaptiveConvexificationBuffer1D{T1,T2,T3} <: AbstractConvexificationBuffe
     basegrid_∂²W::Vector{T3}
 end
 
-struct NewtonConvexificationBuffer1D <: AbstractConvexificationBuffer
+struct NewtonConvexificationBuffer1D{T1,T2} <: AbstractConvexificationBuffer
+    first::Vector{Bool}
+    coarsegrid::ConvexificationBuffer1D{T1,T2}
+    F⁻F⁺::Vector{T1}
 end
 
 # type piracy

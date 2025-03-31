@@ -7,6 +7,7 @@ using AbstractTrees
 using Interpolations
 using LinearAlgebra
 using JuMP, HiGHS
+import ForwardDiff
 
 abstract type AbstractConvexification end
 abstract type AbstractConvexificationBuffer end

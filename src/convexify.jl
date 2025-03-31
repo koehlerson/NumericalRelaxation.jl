@@ -1727,3 +1727,90 @@ function getFplusminus(F::Vector{T2}, W::Vector{T1}) where {T2,T1}
 
     return F_info
 end
+
+Base.@kwdef struct NewtonConvexification1D <: AbstractConvexification
+    n_coarse::Int64 = 200
+    F⁻F⁺ᵢₙᵢₜ::Vector{Float64} = [1., 1.1]
+    increment::Float64 = 1.1
+end
+
+function getstartvalues(newtonconv::NewtonConvexification1D,buffer::NewtonConvexificationBuffer1D,W_fun::Function)
+    buffer.coarsegrid.grid .= collect(range(buffer.F⁻F⁺...; length=newtonconv.n_coarse))
+    buffer.coarsegrid.values .= [W_fun(f) for f in buffer.coarsegrid.grid]
+
+    Fmp = NumericalRelaxation.getFplusminus(buffer.coarsegrid.grid, buffer.coarsegrid.values)
+
+    return isempty(Fmp) ? ones(Tensor{2,1},2) : collect(Fmp[1]), !(isempty(Fmp) || isapprox(Fmp[1][2],buffer.F⁻F⁺[2]))
+end
+
+
+#function residualconvexification(_F⁺,_F⁻,mat,st)
+function residualconvexification(newtonconv::NewtonConvexification1D,F⁻F⁺::Vector,W_fun::Function)
+    dWdF⁺, W⁺ = Tensors.gradient(W_fun, Tensor{2,1}((F⁻F⁺[2],)), :all)
+    dWdF⁻, W⁻ = Tensors.gradient(W_fun, Tensor{2,1}((F⁻F⁺[1],)), :all)
+    m = (W⁺-W⁻)/diff(getindex.(F⁻F⁺,1))[1]
+    return [dWdF⁻[1]-m, dWdF⁺[1]-m]
+end
+
+function newtonconvexification!(newtonconv::NewtonConvexification1D,buffer::NewtonConvexificationBuffer1D,W_fun::Function)
+    normr_old = 1.
+    Fs = [buffer.F⁻F⁺[1],sum(buffer.F⁻F⁺)/2,buffer.F⁻F⁺[2]]
+    Ws = [W_fun(f) for f in Fs]
+    if !NumericalRelaxation.is_convex((Fs[1],Ws[1]),(Fs[2],Ws[2]),(Fs[3],Ws[3]))
+        for i in 1:200
+            drdf = ForwardDiff.jacobian(f->residualconvexification(newtonconv,f,W_fun), getindex.(buffer.F⁻F⁺,1))
+            r = residualconvexification(newtonconv,getindex.(buffer.F⁻F⁺,1),W_fun)
+            buffer.F⁻F⁺ .+= map(x->Tensor{2,1}((x,)),-(drdf\r))#*min(0.01*i,1.)
+            #d⁺ = ConvexDamage.damage_exponential(ConvexDamage.Ψ(tdot(Tensor{2,1}((F⁺⁻[1],))),mat.base_material);D₀=mat.D₀,D∞=mat.D∞)
+            #println("iter: $i \t  F⁺⁻=$(round.(getindex.(buffer.F⁻F⁺,1);digits=4)) \t norm(r)=$(norm(r))")# \t d⁺=$(round(d⁺;digits=4)) \tr=$(round(norm(r);digits=10))")
+            if norm(r)<=1e-5
+                break
+            end
+            normr_old = norm(r)
+        end
+        return false
+    else
+        return true
+    end
+end
+
+function build_buffer(newtonconv::NewtonConvexification1D)
+    grid = [Tensors.Tensor{2,1}((x,)) for x in range(0.,1.;length=newtonconv.n_coarse)]
+    values = zeros(Float64,length(grid))
+    buffer = ConvexificationBuffer1D(grid,values)
+    return NewtonConvexificationBuffer1D([true],buffer,Vector{typeof(grid[1])}(undef,2))
+end
+
+function convexify(newtonconv::NewtonConvexification1D, buffer::NewtonConvexificationBuffer1D{T1}, W::FUN, F::T2, xargs::Vararg{Any,XN}) where {T1,FUN,T2,XN}
+    if buffer.first[1]
+        buffer.first[1] = false
+        buffer.F⁻F⁺ .= Tensor{2,1}.([(newtonconv.F⁻F⁺ᵢₙᵢₜ[1],),(newtonconv.F⁻F⁺ᵢₙᵢₜ[2],)])
+        while true
+            Fmp,valid = getstartvalues(newtonconv,buffer,f->W(f,xargs...))
+            #println(buffer.F⁻F⁺)
+            if valid
+                buffer.F⁻F⁺ .= Fmp; break;
+            elseif buffer.F⁻F⁺[2][1] > newtonconv.F⁻F⁺ᵢₙᵢₜ[2]*newtonconv.increment^100
+                error("failed finding starting values")
+            else
+                buffer.F⁻F⁺[2] *= newtonconv.increment
+            end
+        end
+    end
+    convex = newtonconvexification!(newtonconv,buffer,f->W(f,xargs...))
+    if convex
+        #println("im convex")
+        buffer.F⁻F⁺.=[F, F].+Tensor{2,1}.([(-1e-4,),(1e-4,)])
+    end
+    # reorder below to be agnostic w.r.t. tension and compression
+    if min(buffer.F⁻F⁺...)[1] < F[1] < max(buffer.F⁻F⁺...)[1]
+        support_points = [buffer.F⁻F⁺[2],buffer.F⁻F⁺[1]] #F⁺ F⁻ assumption
+    else
+        support_points = [F, F].+Tensor{2,1}.([(-1e-4,),(1e-4,)])
+    end
+    #support_points = [buffer.F⁻F⁺[2],buffer.F⁻F⁺[1]] #F⁺ F⁻ assumption
+    values_support_points = [W(buffer.F⁻F⁺[2],xargs...),W(buffer.F⁻F⁺[1],xargs...)] # W⁺ W⁻ assumption
+    _perm = sortperm(values_support_points)
+    W_conv = values_support_points[_perm[1]] + ((values_support_points[_perm[2]] - values_support_points[_perm[1]])/(support_points[_perm[2]] - support_points[_perm[1]]))*(F - support_points[_perm[1]])
+    return W_conv, support_points[_perm[2]], support_points[_perm[1]]
+end
