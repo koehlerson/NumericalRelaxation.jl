@@ -1732,6 +1732,7 @@ Base.@kwdef struct NewtonConvexification1D <: AbstractConvexification
     n_coarse::Int64 = 200
     F⁻F⁺ᵢₙᵢₜ::Vector{Float64} = [1., 1.1]
     increment::Float64 = 1.1
+    restol::Float64 = 1e-5
 end
 
 function getstartvalues(newtonconv::NewtonConvexification1D,buffer::NewtonConvexificationBuffer1D,W_fun::Function)
@@ -1763,7 +1764,7 @@ function newtonconvexification!(newtonconv::NewtonConvexification1D,buffer::Newt
             buffer.F⁻F⁺ .+= map(x->Tensor{2,1}((x,)),-(drdf\r))#*min(0.01*i,1.)
             #d⁺ = ConvexDamage.damage_exponential(ConvexDamage.Ψ(tdot(Tensor{2,1}((F⁺⁻[1],))),mat.base_material);D₀=mat.D₀,D∞=mat.D∞)
             #println("iter: $i \t  F⁺⁻=$(round.(getindex.(buffer.F⁻F⁺,1);digits=4)) \t norm(r)=$(norm(r))")# \t d⁺=$(round(d⁺;digits=4)) \tr=$(round(norm(r);digits=10))")
-            if norm(r)<=1e-5
+            if norm(r)<=newtonconv.restol#1e-5
                 break
             end
             normr_old = norm(r)
