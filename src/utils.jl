@@ -30,6 +30,7 @@ end
 
 struct NewtonConvexificationBuffer1D{T1,T2} <: AbstractConvexificationBuffer
     first::Vector{Bool}
+    isconvex::Vector{Bool}
     coarsegrid::ConvexificationBuffer1D{T1,T2}
     F⁻F⁺::Vector{T1}
 end
