@@ -1,3 +1,4 @@
+
 """
     ConvexificationBuffer1D{T1,T2} <: ConvexificationBuffer
 
@@ -31,7 +32,8 @@ end
 struct NewtonConvexificationBuffer1D{T1,T2} <: AbstractConvexificationBuffer
     first::Vector{Bool}
     isconvex::Vector{Bool}
-    coarsegrid::ConvexificationBuffer1D{T1,T2}
+    initgrid::ConvexificationBuffer1D{T1,T2}
+    updategrid::ConvexificationBuffer1D{T1,T2}
     F⁻F⁺::Vector{T1}
 end
 
@@ -284,3 +286,4 @@ function Dminors(ν::Union{Vec{d,T},SVector{d, T}}) where {d,T}
                               0 0 1 ν[2] ν[1] 0    ν[1]*ν[2]])
     end
 end
+

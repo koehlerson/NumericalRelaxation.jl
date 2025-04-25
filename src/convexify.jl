@@ -1,3 +1,4 @@
+
 @doc raw"""
     GrahamScan{T<:Number} <: AbstractConvexification
 
@@ -39,7 +40,7 @@ function convexify(graham::GrahamScan{T2}, buffer::ConvexificationBuffer1D{T1,T2
     convexgrid_n = convexify_nondeleting!(buffer.grid,buffer.values)
     # return W at F
     id⁺ = findfirst(x -> x >= F, @view(buffer.grid[1:convexgrid_n]))
-    id⁻ = findlast(x -> x <= F,  @view(buffer.grid[1:convexgrid_n]))
+    id⁻ = findlast(x -> x <= F, @view(buffer.grid[1:convexgrid_n]))
     id⁺ == id⁻ ? (id⁻ -= 1) : nothing
     # reorder below to be agnostic w.r.t. tension and compression
     support_points = [buffer.grid[id⁺],buffer.grid[id⁻]] #F⁺ F⁻ assumption
@@ -82,7 +83,7 @@ Base.@kwdef struct AdaptiveGrahamScan <: AbstractConvexification
     adaptivegrid_numpoints::Int64 = 115
     exponent::Int64 = 5
     distribution::String = "fix"
-    stepSizeIgnoreHessian::Float64 = 0.05     # minimale Schrittweite für die Hesse berücksichtigt wird 
+    stepSizeIgnoreHessian::Float64 = 0.05     # minimale Schrittweite für die Hesse berücksichtigt wird
     minPointsPerInterval::Int64 = 15
     radius::Float64 = 3                       # nur relevant für: distribution = "fix"
     minStepSize::Float64 = 0.03
@@ -121,7 +122,7 @@ function convexify(adaptivegraham::AdaptiveGrahamScan, buffer::AdaptiveConvexifi
     convexgrid_n = convexify_nondeleting!(buffer.adaptivebuffer.grid,buffer.adaptivebuffer.values)
     # return W at F
     id⁺ = findfirst(x -> x >= F, @view(buffer.adaptivebuffer.grid[1:convexgrid_n]))
-    id⁻ = findlast(x -> x <= F,  @view(buffer.adaptivebuffer.grid[1:convexgrid_n]))
+    id⁻ = findlast(x -> x <= F, @view(buffer.adaptivebuffer.grid[1:convexgrid_n]))
     # reorder below to be agnostic w.r.t. tension and compression
     support_points = [buffer.adaptivebuffer.grid[id⁺],buffer.adaptivebuffer.grid[id⁻]] #F⁺ F⁻ assumption
     values_support_points = [buffer.adaptivebuffer.values[id⁺],buffer.adaptivebuffer.values[id⁻]] # W⁺ W⁻ assumption
@@ -202,7 +203,7 @@ end
             return  F⁺⁻
         end
 
-Based on any grid `ac_buffer.basebuffer.grid` and coresponding function values `ac_buffer.basebuffer.values` and 
+Based on any grid `ac_buffer.basebuffer.grid` and coresponding function values `ac_buffer.basebuffer.values` and
 its second derivative `ac_buffer.basegrid_∂²W`, a
 set of points of interest `F⁺⁻` will be determined. Based on this set of points and
 different parameters stored in `ac`
@@ -321,8 +322,8 @@ end
 
 function combine(X_slp::Array{T}, X_hes::Array{T},d=0.4::AbstractFloat) where {T}
     # X_HEssian --> aus ∂²W∂x² extrahierte Minima.
-    # X_Slope --> aus den Funktionswerten herausgefiltertete Start- und Endpunkte nicht konv. Bereiche 
-    #=d       --> relative Distanz zwischen Minima in X_Hessian und nächstem/vorherigem Punkt an dem 
+    # X_Slope --> aus den Funktionswerten herausgefiltertete Start- und Endpunkte nicht konv. Bereiche
+    #=d       --> relative Distanz zwischen Minima in X_Hessian und nächstem/vorherigem Punkt an dem
                   Intervallgrenze gesetzt werden soll =#
     X_Slp = copy(X_slp)
     X_Hes = copy(X_hes)
@@ -387,7 +388,7 @@ function discretize_interval(Fₒᵤₜ::Array{T}, F⁺⁻::Array{T}, ac::Adapti
         gridpoints_oninterval = Array{Int64}(undef,numIntervals)
         distribute_gridpoints!(gridpoints_oninterval, F⁺⁻, ac)
         # ================================================================================
-        # ===================================  fill vector  ==============================
+        # ====================================  fill vector ==============================
         # ================================================================================
         ∑gridpoints = sum(gridpoints_oninterval)
         ∑j = 0
@@ -398,7 +399,7 @@ function discretize_interval(Fₒᵤₜ::Array{T}, F⁺⁻::Array{T}, ac::Adapti
                 Fₒᵤₜ[∑j+j+1] = project(P,j)
                 j += 1
             end
-            ∑j += gridpoints_oninterval[i]; 
+            ∑j += gridpoints_oninterval[i];
         end
         Fₒᵤₜ[end] = F⁺⁻[end]
         return nothing
@@ -420,14 +421,14 @@ function distribute_gridpoints!(vecₒᵤₜ::Array, F⁺⁻::Array, ac::Adaptiv
         # ================= Stuetzstellen auf Intervalle aufteilen =======================
         # ================================================================================
         for i=1:numIntervals
-            gridpoints_oninterval[i] = Int(round((F⁺⁻[i+1]-F⁺⁻[i])/(F⁺⁻[end]-F⁺⁻[1]) * (ac.adaptivegrid_numpoints-1)))                    
+            gridpoints_oninterval[i] = Int(round((F⁺⁻[i+1]-F⁺⁻[i])/(F⁺⁻[end]-F⁺⁻[1]) * (ac.adaptivegrid_numpoints-1)))
         end
         # ================================================================================
         # ======== korrektur --> um vorgegebene Anzahl an Gitterpunkten einzuhalten ======
         # ================================================================================
         # normierung
         norm_gridpoints_oninterval = gridpoints_oninterval/sum(gridpoints_oninterval)
-        gridpoints_oninterval = Int.(round.(norm_gridpoints_oninterval*(ac.adaptivegrid_numpoints-1))) 
+        gridpoints_oninterval = Int.(round.(norm_gridpoints_oninterval*(ac.adaptivegrid_numpoints-1)))
         # Mindestanzahl eingehlaten?
         for i in 1:length(gridpoints_oninterval)
             gridpoints_oninterval[i] = max(ac.minPointsPerInterval,gridpoints_oninterval[i])
@@ -452,10 +453,10 @@ function distribute_gridpoints!(vecₒᵤₜ::Array, F⁺⁻::Array, ac::Adaptiv
         while (sum(mask_active_last-mask_active)!=0) && (cnt<=10)
             # ================================================================================
             # ================= Stuetzstellen auf Intervalle aufteilen =======================
-            # ================================================================================ 
+            # ================================================================================
             mask_active_last = copy(mask_active)
             activeIntervals = sum(mask_active)
-            activeIntervals==0 ? error("Could not distribute grid points among intervalls. Try to reduce number of grid points or decrease minimum step size.") : nothing 
+            activeIntervals==0 ? error("Could not distribute grid points among intervalls. Try to reduce number of grid points or decrease minimum step size.") : nothing
             numGridpointsOnRadius =
                 Int(round( (ac.adaptivegrid_numpoints-1-sum(gridpoints_oninterval.*inv_m(mask_active)))
                 /(activeIntervals) ))
@@ -477,7 +478,7 @@ function distribute_gridpoints!(vecₒᵤₜ::Array, F⁺⁻::Array, ac::Adaptiv
             norm_gridpoints_oninterval = gridpoints_oninterval./(sum(mask_active.*gridpoints_oninterval))
             norm_gridpoints_oninterval .*= mask_active
             active_points = ac.adaptivegrid_numpoints - 1 - sum(inv_m(mask_active).*gridpoints_oninterval)
-            gridpoints_oninterval = Int.(round.(inv_m(mask_active).*gridpoints_oninterval +     norm_gridpoints_oninterval*active_points))
+            gridpoints_oninterval = Int.(round.(inv_m(mask_active).*gridpoints_oninterval + norm_gridpoints_oninterval*active_points))
             # reduktion falls minimale Schrittweite*Stützpunkte > Intervallbreite
             for i in 1:length(gridpoints_oninterval)
                 maxnum = floor((F⁺⁻[i+1][1]-F⁺⁻[i][1])/ac.minStepSize)
@@ -949,7 +950,7 @@ function build_buffer(r1convexification::R1Convexification{dimp,dimc,dirtype,T})
 end
 
 @doc raw"""
-    convexify!(r1convexification::R1Convexification,r1buffer::R1ConvexificationBuffer,W::FUN,xargs::Vararg{Any,XN};buildtree=true,maxk=20) where {FUN,XN}
+convexify!(r1convexification::R1Convexification,r1buffer::R1ConvexificationBuffer,W::FUN,xargs::Vararg{Any,XN};buildtree=true,maxk=20) where {FUN,XN}
 Multi-dimensional parallelized implementation of the rank-one convexification.
 If `buildtree=true` the lamination tree is saved in the `r1buffer.laminatetree`.
 Note that the interpolation objects within `r1buffer` are overwritten in this routine.
@@ -1109,7 +1110,7 @@ struct HROC{dimp,R1Dir<:RankOneDirections{dimp},T} <: AbstractConvexification
 end
 
 function HROC(maxlevel::Int,n_convexpoints::Int,dir::R1Dir,GLcheck::Bool,start::Tensor{2,dimp,T,dimc},stop::Tensor{2,dimp,T,dimc}) where {dimp,R1Dir<:RankOneDirections{dimp},T,dimc}
-    HROC(maxlevel,n_convexpoints,dir,GLcheck,collect(start.data),collect(stop.data))
+HROC(maxlevel,n_convexpoints,dir,GLcheck,collect(start.data),collect(stop.data))
 end
 
 HROC(start::Tensor{2,dimp},stop::Tensor{2,dimp};maxlevel=10,l=1,dirs=ParametrizedR1Directions(dimp;l=l),GLcheck=true,n_convexpoints=1000) where {dimp} = HROC(maxlevel,n_convexpoints,dirs,GLcheck,start,stop)
@@ -1259,7 +1260,7 @@ function rankonedir(laminate::Laminate{dim}) where dim
     start_𝐀 = Tensor{2,dim}((i,j)->round(start_𝐀[i,j]))
 end
 
-@doc raw"""    
+@doc raw"""
     convexify(hroc::HROC, buffer::HROCBuffer, W::FUN, F::T1, xargs::Vararg{Any,XN}) -> bt::BinaryLaminationTree
 Performs a hierarchical rank one convexification (HROC) based on the H-sequence characterization of the convex envelope.
 Note that the output of the algorithm is only an upper bound. For a class of problems the provided hull matches the rank-one convex envelope.
@@ -1269,7 +1270,7 @@ function convexify(hroc::HROC, buffer::HROCBuffer, W::FUN, F::T1, xargs::Vararg{
     return BinaryLaminationTree(hroc,buffer,W,F,xargs...)
 end
 
-@doc raw"""    
+@doc raw"""
     convexify(prev_bt::BinaryLaminationTree,hroc::HROC, buffer::HROCBuffer, W::FUN, F::T1, xargs::Vararg{Any,XN}) -> bt::BinaryLaminationTree
 Performs a hierarchical rank one convexification (HROC) based and enforces laminate continuity by preferring the previous laminate direction.
 """
@@ -1580,7 +1581,7 @@ end
 Datastructure which holds basic parameters and grid for the Polyconvexification
 
 - `dimp::Int` dimension of the physical problem
-- `dimc::Int` lifted dimension, 2D -> 3, 3D -> 7, in this dimension the convexificaiton problem for the polyconvexification is stated 
+- `dimc::Int` lifted dimension, 2D -> 3, 3D -> 7, in this dimension the convexificaiton problem for the polyconvexification is stated
 - `r::Float64` discretization radius
 - `nref::Int` number of uniform grid refinements
 - `grid::Vector{T1}` grid of the signed singula values
@@ -1630,7 +1631,7 @@ end
     convexify(poly_convexification::PolyConvexification, poly_buffer::PolyConvexificationBuffer, Φ::FUN, ν::Union{Vec{d},Vector{Float64}}, xargs::Vararg{Any,XN}; returnDerivs::Bool=true) where {FUN,XN,d}
 Signed singular value polyconvexification using the linear programming approach.
 Compute approximation to the singular value polycovex envelope of the function `Φ` which is the reformulation of the isotropic function `W`
-in terms of signed singular values $Φ(ν) = W(diagm(ν))$, at the point `ν` via the linear programming approach as discussed in 
+in terms of signed singular values $Φ(ν) = W(diagm(ν))$, at the point `ν` via the linear programming approach as discussed in
     [^1] Timo Neumeier, Malte A. Peter, Daniel Peterseim, David Wiedemann.
     Computational polyconvexification of isotropic functions, arXiv 2307.15676, 2023.
 The parameters `nref` and `r` (stored in poly_convexification struct) discribe the grid by radius `r` (in the ∞ norm) and `nref` uniform mesh refinements.
@@ -1729,21 +1730,27 @@ function getFplusminus(F::Vector{T2}, W::Vector{T1}) where {T2,T1}
 end
 
 Base.@kwdef struct NewtonConvexification1D <: AbstractConvexification
-    n_coarse::Int64 = 200
+    n_initgrid::Int64 = 200
+    n_updategrid::Int64 = 200
     F⁻F⁺ᵢₙᵢₜ::Vector{Float64} = [1., 1.1]
     increment::Float64 = 1.1
     restol::Float64 = 1e-5
     updatetol::Float64 = 1e-30
     max_nonconvex_size::Float64 = 0.005
+    intermediate_graham::Bool = false
 end
 
-function getstartvalues(newtonconv::NewtonConvexification1D,buffer::NewtonConvexificationBuffer1D,W_fun::Function)
-    buffer.coarsegrid.grid .= collect(range(buffer.F⁻F⁺...; length=newtonconv.n_coarse))
-    buffer.coarsegrid.values .= [W_fun(f) for f in buffer.coarsegrid.grid]
+function getnonconvexsupport(Fs::Union{Vector{Float64},AbstractRange{Float64}},gridbuffer::ConvexificationBuffer1D{T1,T2},W_fun::Function) where {T1,T2}
+    # fill buffers
+    gridbuffer.grid .= [typeof(gridbuffer.grid[1])(f) for f in Fs]
+    gridbuffer.values .= [W_fun(f) for f in gridbuffer.grid]
 
-    Fmp = NumericalRelaxation.getFplusminus(buffer.coarsegrid.grid, buffer.coarsegrid.values)
-
-    return isempty(Fmp) ? ones(Tensor{2,1},2) : collect(Fmp[1]), !(isempty(Fmp) || isapprox(Fmp[1][2],buffer.F⁻F⁺[2]))
+    # get supporting points
+    Fmp = NumericalRelaxation.getFplusminus(gridbuffer.grid, gridbuffer.values)
+    # get return values
+    Fmp_out = isempty(Fmp) ? ones(Tensor{2,1},2) : collect(Fmp[1])
+    isvalid = !(isempty(Fmp) || isapprox(Fmp[1][2],gridbuffer.grid[end]))
+    return Fmp_out, isvalid
 end
 
 
@@ -1758,21 +1765,21 @@ end
 function newtonconvexification!(newtonconv::NewtonConvexification1D,buffer::NewtonConvexificationBuffer1D,W_fun::Function)
     δ = 1e-10
     Fs = range(buffer.F⁻F⁺[1],buffer.F⁻F⁺[2];length=20)
-#    Fs = diff(Fs)[1][1]<δ ?
-#                        map.(x->Tensor{2,1}((x,)),collect(buffer.F⁻F⁺[1][1]:δ:buffer.F⁻F⁺[2][1])) : Fs
+    #Fs = diff(Fs)[1][1]<δ ?
+    #map.(x->Tensor{2,1}((x,)),collect(buffer.F⁻F⁺[1][1]:δ:buffer.F⁻F⁺[2][1])) : Fs
     Ws = [W_fun(f) for f in Fs]
     convex_estimate = diff(diff(Ws)./diff(Fs)).<=0
 
     if !buffer.isconvex[1]
         if any(convex_estimate) && abs(diff(buffer.F⁻F⁺)[1][1])>=(newtonconv.max_nonconvex_size*sum(buffer.F⁻F⁺)/2)[1]#convexity check
-            for i in 1:200
+            for i in 1:300
                 drdf = ForwardDiff.jacobian(f->residualconvexification(newtonconv,f,W_fun), getindex.(buffer.F⁻F⁺,1))
                 r = residualconvexification(newtonconv,getindex.(buffer.F⁻F⁺,1),W_fun)
                 dF = map(x->Tensor{2,1}((x,)),-(drdf\r))*min(0.05*i^2,1.)
                 buffer.F⁻F⁺ .+= dF
                 #@show norm(r), norm(dF)
                 #d⁺ = ConvexDamage.damage_exponential(ConvexDamage.Ψ(tdot(Tensor{2,1}((F⁺⁻[1],))),mat.base_material);D₀=mat.D₀,D∞=mat.D∞)
-                #println("iter: $i \t  F⁺⁻=$(round.(getindex.(buffer.F⁻F⁺,1);digits=4)) \t norm(r)=$(norm(r))")# \t d⁺=$(round(d⁺;digits=4)) \tr=$(round(norm(r);digits=10))")
+                #println("iter: $i \t F⁺⁻=$(round.(getindex.(buffer.F⁻F⁺,1);digits=4)) \t norm(r)=$(norm(r))")# \t d⁺=$(round(d⁺;digits=4)) \tr=$(round(norm(r);digits=10))")
                 if norm(r)<=newtonconv.restol || norm(dF)<=newtonconv.updatetol
                     #println(" ")
                     return buffer.isconvex[1]
@@ -1786,39 +1793,63 @@ function newtonconvexification!(newtonconv::NewtonConvexification1D,buffer::Newt
 end
 
 function build_buffer(newtonconv::NewtonConvexification1D)
-    grid = [Tensors.Tensor{2,1}((x,)) for x in range(0.,1.;length=newtonconv.n_coarse)]
-    values = zeros(Float64,length(grid))
-    buffer = ConvexificationBuffer1D(grid,values)
-    return NewtonConvexificationBuffer1D([true],[false],buffer,Vector{typeof(grid[1])}(undef,2))
+    initgrid = [Tensors.Tensor{2,1}((x,)) for x in range(0.,1.;length=newtonconv.n_initgrid)]
+    initvalues = zeros(Float64,length(initgrid))
+    initbuffer = ConvexificationBuffer1D(initgrid,initvalues)
+    updategrid = [Tensors.Tensor{2,1}((x,)) for x in range(0.,1.;length=newtonconv.n_updategrid)]
+    updatevalues = zeros(Float64,length(updategrid))
+    updatebuffer = ConvexificationBuffer1D(updategrid,updatevalues)
+    return NewtonConvexificationBuffer1D([true],[false],initbuffer,updatebuffer,Vector{typeof(initgrid[1])}(undef,2))
 end
 
 function convexify(newtonconv::NewtonConvexification1D, buffer::NewtonConvexificationBuffer1D{T1}, W::FUN, F::T2, xargs::Vararg{Any,XN}) where {T1,FUN,T2,XN}
+    # determine initial guess for newton iterations
     if buffer.first[1]
         buffer.first[1] = false
         buffer.F⁻F⁺ .= Tensor{2,1}.([(newtonconv.F⁻F⁺ᵢₙᵢₜ[1],),(newtonconv.F⁻F⁺ᵢₙᵢₜ[2],)])
         while true
-            Fmp,valid = getstartvalues(newtonconv,buffer,f->W(f,xargs...))
+            Fmp,valid = getnonconvexsupport(range(getindex.(buffer.F⁻F⁺,1)...; length=length(buffer.initgrid.grid)), buffer.initgrid, f->W(f,xargs...))
             #println(buffer.F⁻F⁺)
             if valid
                 buffer.F⁻F⁺ .= Fmp;
+                #println(Fmp)
                 break;
             elseif buffer.F⁻F⁺[2][1] > newtonconv.F⁻F⁺ᵢₙᵢₜ[2]*newtonconv.increment^100
                 error("failed finding starting values")
             else
                 buffer.F⁻F⁺[2] *= newtonconv.increment
+                #println("\t $(buffer.F⁻F⁺[2])")
             end
         end
+    elseif newtonconv.intermediate_graham
+            ΔF⁻F⁺ = diff(buffer.F⁻F⁺)[1]
+            l1 = Int(floor(0.5*(newtonconv.n_updategrid-1)))
+            l2 = Int(ceil(0.5*(newtonconv.n_updategrid-1)))
+            r1 = range((buffer.F⁻F⁺[1][1].+ΔF⁻F⁺.*[0,0.3])...;length=l1)
+            r2 = range((buffer.F⁻F⁺[2][1].+ΔF⁻F⁺.*[-0.3,0])...;length=l2)
+            #r11 = range((buffer.F⁻F⁺[1][1].+ΔF⁻F⁺.*[-0.01,0])...;length=Int(floor(l1*0.5)))
+            #r12 = range((buffer.F⁻F⁺[1][1].+ΔF⁻F⁺.*[0.001,0.2])...;length=Int(ceil(l1*0.5)))
+            #r21 = range((buffer.F⁻F⁺[2][1].+ΔF⁻F⁺.*[-0.45,-0.001])...;length=Int(ceil(0.5*l2)))
+            #r22 = range((buffer.F⁻F⁺[2][1].+ΔF⁻F⁺.*[0,0.045])...;length=Int(floor(0.5*l2)))
+            rng = vcat(r1, buffer.F⁻F⁺[1][1]+ΔF⁻F⁺/2, r2)
+            Fmp,valid = getnonconvexsupport(rng, buffer.updategrid,f->W(f,xargs...))
+            isempty(Fmp) && error("wtf ist hier los???")
+            buffer.F⁻F⁺ .= Fmp
     end
+    # do newton iterations
     newtonconvexification!(newtonconv,buffer,f->W(f,xargs...))
+    buffer.F⁻F⁺ == sort(buffer.F⁻F⁺) || println("Fp und Fm sind vertauscht")
+    sort!(buffer.F⁻F⁺) # in case newton did weired stuff
+
     # reorder below to be agnostic w.r.t. tension and compression
-    if min(buffer.F⁻F⁺...)[1] < F[1] < max(buffer.F⁻F⁺...)[1]
-        support_points = [buffer.F⁻F⁺[2],buffer.F⁻F⁺[1]] #F⁺ F⁻ assumption
+    if buffer.F⁻F⁺[1][1] < F[1] < buffer.F⁻F⁺[2][1]
+        support_points = [buffer.F⁻F⁺[2:-1:1]...] #F⁺ F⁻ assumption
     else
         support_points = [F, F].+Tensor{2,1}.([(1e-10,),(-1e-10,)])
     end
-    #support_points = [buffer.F⁻F⁺[2],buffer.F⁻F⁺[1]] #F⁺ F⁻ assumption
-    values_support_points = [W(support_points[2],xargs...),W(support_points[1],xargs...)] # W⁺ W⁻ assumption
+    values_support_points = [W(s,xargs...) for s in support_points] # W⁺ W⁻ assumption
     _perm = sortperm(values_support_points)
     W_conv = values_support_points[_perm[1]] + ((values_support_points[_perm[2]] - values_support_points[_perm[1]])/(support_points[_perm[2]] - support_points[_perm[1]]))*(F - support_points[_perm[1]])
     return W_conv, support_points[_perm[2]], support_points[_perm[1]]
 end
+
