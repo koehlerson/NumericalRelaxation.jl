@@ -1,3 +1,4 @@
+
 @doc raw"""
     GrahamScan{T<:Number} <: AbstractConvexification
 
@@ -39,7 +40,7 @@ function convexify(graham::GrahamScan{T2}, buffer::ConvexificationBuffer1D{T1,T2
     convexgrid_n = convexify_nondeleting!(buffer.grid,buffer.values)
     # return W at F
     id⁺ = findfirst(x -> x >= F, @view(buffer.grid[1:convexgrid_n]))
-    id⁻ = findlast(x -> x <= F,  @view(buffer.grid[1:convexgrid_n]))
+    id⁻ = findlast(x -> x <= F, @view(buffer.grid[1:convexgrid_n]))
     id⁺ == id⁻ ? (id⁻ -= 1) : nothing
     # reorder below to be agnostic w.r.t. tension and compression
     support_points = [buffer.grid[id⁺],buffer.grid[id⁻]] #F⁺ F⁻ assumption
@@ -82,7 +83,7 @@ Base.@kwdef struct AdaptiveGrahamScan <: AbstractConvexification
     adaptivegrid_numpoints::Int64 = 115
     exponent::Int64 = 5
     distribution::String = "fix"
-    stepSizeIgnoreHessian::Float64 = 0.05     # minimale Schrittweite für die Hesse berücksichtigt wird 
+    stepSizeIgnoreHessian::Float64 = 0.05     # minimale Schrittweite für die Hesse berücksichtigt wird
     minPointsPerInterval::Int64 = 15
     radius::Float64 = 3                       # nur relevant für: distribution = "fix"
     minStepSize::Float64 = 0.03
@@ -121,7 +122,7 @@ function convexify(adaptivegraham::AdaptiveGrahamScan, buffer::AdaptiveConvexifi
     convexgrid_n = convexify_nondeleting!(buffer.adaptivebuffer.grid,buffer.adaptivebuffer.values)
     # return W at F
     id⁺ = findfirst(x -> x >= F, @view(buffer.adaptivebuffer.grid[1:convexgrid_n]))
-    id⁻ = findlast(x -> x <= F,  @view(buffer.adaptivebuffer.grid[1:convexgrid_n]))
+    id⁻ = findlast(x -> x <= F, @view(buffer.adaptivebuffer.grid[1:convexgrid_n]))
     # reorder below to be agnostic w.r.t. tension and compression
     support_points = [buffer.adaptivebuffer.grid[id⁺],buffer.adaptivebuffer.grid[id⁻]] #F⁺ F⁻ assumption
     values_support_points = [buffer.adaptivebuffer.values[id⁺],buffer.adaptivebuffer.values[id⁻]] # W⁺ W⁻ assumption
@@ -202,7 +203,7 @@ end
             return  F⁺⁻
         end
 
-Based on any grid `ac_buffer.basebuffer.grid` and coresponding function values `ac_buffer.basebuffer.values` and 
+Based on any grid `ac_buffer.basebuffer.grid` and coresponding function values `ac_buffer.basebuffer.values` and
 its second derivative `ac_buffer.basegrid_∂²W`, a
 set of points of interest `F⁺⁻` will be determined. Based on this set of points and
 different parameters stored in `ac`
@@ -321,8 +322,8 @@ end
 
 function combine(X_slp::Array{T}, X_hes::Array{T},d=0.4::AbstractFloat) where {T}
     # X_HEssian --> aus ∂²W∂x² extrahierte Minima.
-    # X_Slope --> aus den Funktionswerten herausgefiltertete Start- und Endpunkte nicht konv. Bereiche 
-    #=d       --> relative Distanz zwischen Minima in X_Hessian und nächstem/vorherigem Punkt an dem 
+    # X_Slope --> aus den Funktionswerten herausgefiltertete Start- und Endpunkte nicht konv. Bereiche
+    #=d       --> relative Distanz zwischen Minima in X_Hessian und nächstem/vorherigem Punkt an dem
                   Intervallgrenze gesetzt werden soll =#
     X_Slp = copy(X_slp)
     X_Hes = copy(X_hes)
@@ -387,7 +388,7 @@ function discretize_interval(Fₒᵤₜ::Array{T}, F⁺⁻::Array{T}, ac::Adapti
         gridpoints_oninterval = Array{Int64}(undef,numIntervals)
         distribute_gridpoints!(gridpoints_oninterval, F⁺⁻, ac)
         # ================================================================================
-        # ===================================  fill vector  ==============================
+        # ====================================  fill vector ==============================
         # ================================================================================
         ∑gridpoints = sum(gridpoints_oninterval)
         ∑j = 0
@@ -398,7 +399,7 @@ function discretize_interval(Fₒᵤₜ::Array{T}, F⁺⁻::Array{T}, ac::Adapti
                 Fₒᵤₜ[∑j+j+1] = project(P,j)
                 j += 1
             end
-            ∑j += gridpoints_oninterval[i]; 
+            ∑j += gridpoints_oninterval[i];
         end
         Fₒᵤₜ[end] = F⁺⁻[end]
         return nothing
@@ -420,14 +421,14 @@ function distribute_gridpoints!(vecₒᵤₜ::Array, F⁺⁻::Array, ac::Adaptiv
         # ================= Stuetzstellen auf Intervalle aufteilen =======================
         # ================================================================================
         for i=1:numIntervals
-            gridpoints_oninterval[i] = Int(round((F⁺⁻[i+1]-F⁺⁻[i])/(F⁺⁻[end]-F⁺⁻[1]) * (ac.adaptivegrid_numpoints-1)))                    
+            gridpoints_oninterval[i] = Int(round((F⁺⁻[i+1]-F⁺⁻[i])/(F⁺⁻[end]-F⁺⁻[1]) * (ac.adaptivegrid_numpoints-1)))
         end
         # ================================================================================
         # ======== korrektur --> um vorgegebene Anzahl an Gitterpunkten einzuhalten ======
         # ================================================================================
         # normierung
         norm_gridpoints_oninterval = gridpoints_oninterval/sum(gridpoints_oninterval)
-        gridpoints_oninterval = Int.(round.(norm_gridpoints_oninterval*(ac.adaptivegrid_numpoints-1))) 
+        gridpoints_oninterval = Int.(round.(norm_gridpoints_oninterval*(ac.adaptivegrid_numpoints-1)))
         # Mindestanzahl eingehlaten?
         for i in 1:length(gridpoints_oninterval)
             gridpoints_oninterval[i] = max(ac.minPointsPerInterval,gridpoints_oninterval[i])
@@ -452,10 +453,10 @@ function distribute_gridpoints!(vecₒᵤₜ::Array, F⁺⁻::Array, ac::Adaptiv
         while (sum(mask_active_last-mask_active)!=0) && (cnt<=10)
             # ================================================================================
             # ================= Stuetzstellen auf Intervalle aufteilen =======================
-            # ================================================================================ 
+            # ================================================================================
             mask_active_last = copy(mask_active)
             activeIntervals = sum(mask_active)
-            activeIntervals==0 ? error("Could not distribute grid points among intervalls. Try to reduce number of grid points or decrease minimum step size.") : nothing 
+            activeIntervals==0 ? error("Could not distribute grid points among intervalls. Try to reduce number of grid points or decrease minimum step size.") : nothing
             numGridpointsOnRadius =
                 Int(round( (ac.adaptivegrid_numpoints-1-sum(gridpoints_oninterval.*inv_m(mask_active)))
                 /(activeIntervals) ))
@@ -477,7 +478,7 @@ function distribute_gridpoints!(vecₒᵤₜ::Array, F⁺⁻::Array, ac::Adaptiv
             norm_gridpoints_oninterval = gridpoints_oninterval./(sum(mask_active.*gridpoints_oninterval))
             norm_gridpoints_oninterval .*= mask_active
             active_points = ac.adaptivegrid_numpoints - 1 - sum(inv_m(mask_active).*gridpoints_oninterval)
-            gridpoints_oninterval = Int.(round.(inv_m(mask_active).*gridpoints_oninterval +     norm_gridpoints_oninterval*active_points))
+            gridpoints_oninterval = Int.(round.(inv_m(mask_active).*gridpoints_oninterval + norm_gridpoints_oninterval*active_points))
             # reduktion falls minimale Schrittweite*Stützpunkte > Intervallbreite
             for i in 1:length(gridpoints_oninterval)
                 maxnum = floor((F⁺⁻[i+1][1]-F⁺⁻[i][1])/ac.minStepSize)
@@ -949,7 +950,7 @@ function build_buffer(r1convexification::R1Convexification{dimp,dimc,dirtype,T})
 end
 
 @doc raw"""
-    convexify!(r1convexification::R1Convexification,r1buffer::R1ConvexificationBuffer,W::FUN,xargs::Vararg{Any,XN};buildtree=true,maxk=20) where {FUN,XN}
+convexify!(r1convexification::R1Convexification,r1buffer::R1ConvexificationBuffer,W::FUN,xargs::Vararg{Any,XN};buildtree=true,maxk=20) where {FUN,XN}
 Multi-dimensional parallelized implementation of the rank-one convexification.
 If `buildtree=true` the lamination tree is saved in the `r1buffer.laminatetree`.
 Note that the interpolation objects within `r1buffer` are overwritten in this routine.
@@ -1109,7 +1110,7 @@ struct HROC{dimp,R1Dir<:RankOneDirections{dimp},T} <: AbstractConvexification
 end
 
 function HROC(maxlevel::Int,n_convexpoints::Int,dir::R1Dir,GLcheck::Bool,start::Tensor{2,dimp,T,dimc},stop::Tensor{2,dimp,T,dimc}) where {dimp,R1Dir<:RankOneDirections{dimp},T,dimc}
-    HROC(maxlevel,n_convexpoints,dir,GLcheck,collect(start.data),collect(stop.data))
+HROC(maxlevel,n_convexpoints,dir,GLcheck,collect(start.data),collect(stop.data))
 end
 
 HROC(start::Tensor{2,dimp},stop::Tensor{2,dimp};maxlevel=10,l=1,dirs=ParametrizedR1Directions(dimp;l=l),GLcheck=true,n_convexpoints=1000) where {dimp} = HROC(maxlevel,n_convexpoints,dirs,GLcheck,start,stop)
@@ -1259,7 +1260,7 @@ function rankonedir(laminate::Laminate{dim}) where dim
     start_𝐀 = Tensor{2,dim}((i,j)->round(start_𝐀[i,j]))
 end
 
-@doc raw"""    
+@doc raw"""
     convexify(hroc::HROC, buffer::HROCBuffer, W::FUN, F::T1, xargs::Vararg{Any,XN}) -> bt::BinaryLaminationTree
 Performs a hierarchical rank one convexification (HROC) based on the H-sequence characterization of the convex envelope.
 Note that the output of the algorithm is only an upper bound. For a class of problems the provided hull matches the rank-one convex envelope.
@@ -1269,7 +1270,7 @@ function convexify(hroc::HROC, buffer::HROCBuffer, W::FUN, F::T1, xargs::Vararg{
     return BinaryLaminationTree(hroc,buffer,W,F,xargs...)
 end
 
-@doc raw"""    
+@doc raw"""
     convexify(prev_bt::BinaryLaminationTree,hroc::HROC, buffer::HROCBuffer, W::FUN, F::T1, xargs::Vararg{Any,XN}) -> bt::BinaryLaminationTree
 Performs a hierarchical rank one convexification (HROC) based and enforces laminate continuity by preferring the previous laminate direction.
 """
@@ -1580,7 +1581,7 @@ end
 Datastructure which holds basic parameters and grid for the Polyconvexification
 
 - `dimp::Int` dimension of the physical problem
-- `dimc::Int` lifted dimension, 2D -> 3, 3D -> 7, in this dimension the convexificaiton problem for the polyconvexification is stated 
+- `dimc::Int` lifted dimension, 2D -> 3, 3D -> 7, in this dimension the convexificaiton problem for the polyconvexification is stated
 - `r::Float64` discretization radius
 - `nref::Int` number of uniform grid refinements
 - `grid::Vector{T1}` grid of the signed singula values
@@ -1630,7 +1631,7 @@ end
     convexify(poly_convexification::PolyConvexification, poly_buffer::PolyConvexificationBuffer, Φ::FUN, ν::Union{Vec{d},Vector{Float64}}, xargs::Vararg{Any,XN}; returnDerivs::Bool=true) where {FUN,XN,d}
 Signed singular value polyconvexification using the linear programming approach.
 Compute approximation to the singular value polycovex envelope of the function `Φ` which is the reformulation of the isotropic function `W`
-in terms of signed singular values $Φ(ν) = W(diagm(ν))$, at the point `ν` via the linear programming approach as discussed in 
+in terms of signed singular values $Φ(ν) = W(diagm(ν))$, at the point `ν` via the linear programming approach as discussed in
     [^1] Timo Neumeier, Malte A. Peter, Daniel Peterseim, David Wiedemann.
     Computational polyconvexification of isotropic functions, arXiv 2307.15676, 2023.
 The parameters `nref` and `r` (stored in poly_convexification struct) discribe the grid by radius `r` (in the ∞ norm) and `nref` uniform mesh refinements.
@@ -1764,8 +1765,8 @@ end
 function newtonconvexification!(newtonconv::NewtonConvexification1D,buffer::NewtonConvexificationBuffer1D,W_fun::Function)
     δ = 1e-10
     Fs = range(buffer.F⁻F⁺[1],buffer.F⁻F⁺[2];length=20)
-#    Fs = diff(Fs)[1][1]<δ ?
-#                        map.(x->Tensor{2,1}((x,)),collect(buffer.F⁻F⁺[1][1]:δ:buffer.F⁻F⁺[2][1])) : Fs
+    #Fs = diff(Fs)[1][1]<δ ?
+    #map.(x->Tensor{2,1}((x,)),collect(buffer.F⁻F⁺[1][1]:δ:buffer.F⁻F⁺[2][1])) : Fs
     Ws = [W_fun(f) for f in Fs]
     convex_estimate = diff(diff(Ws)./diff(Fs)).<=0
     F⁻F⁺₀ = deepcopy(buffer.F⁻F⁺)
@@ -1859,3 +1860,4 @@ function convexify(newtonconv::NewtonConvexification1D, buffer::NewtonConvexific
         return W_conv, support_points[_perm[2]], support_points[_perm[1]]
     end
 end
+
