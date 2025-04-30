@@ -1768,25 +1768,29 @@ function newtonconvexification!(newtonconv::NewtonConvexification1D,buffer::Newt
 #                        map.(x->Tensor{2,1}((x,)),collect(buffer.F⁻F⁺[1][1]:δ:buffer.F⁻F⁺[2][1])) : Fs
     Ws = [W_fun(f) for f in Fs]
     convex_estimate = diff(diff(Ws)./diff(Fs)).<=0
-
+    F⁻F⁺₀ = deepcopy(buffer.F⁻F⁺)
     if !buffer.isconvex[1]
         if any(convex_estimate) && abs(diff(buffer.F⁻F⁺)[1][1])>=(newtonconv.max_nonconvex_size*sum(buffer.F⁻F⁺)/2)[1]#convexity check
             for i in 1:300
                 drdf = ForwardDiff.jacobian(f->residualconvexification(newtonconv,f,W_fun), getindex.(buffer.F⁻F⁺,1))
                 r = residualconvexification(newtonconv,getindex.(buffer.F⁻F⁺,1),W_fun)
-                dF = map(x->Tensor{2,1}((x,)),-(drdf\r))*min(0.05*i^2,1.)
+                dF = map(x->Tensor{2,1}((x,)),-(drdf\r))*min(0.01*i^2,1.)
                 buffer.F⁻F⁺ .+= dF
-                #@show norm(r), norm(dF)
+                #@show norm(r), norm(dF), buffer.F⁻F⁺
                 #d⁺ = ConvexDamage.damage_exponential(ConvexDamage.Ψ(tdot(Tensor{2,1}((F⁺⁻[1],))),mat.base_material);D₀=mat.D₀,D∞=mat.D∞)
-                #println("iter: $i \t  F⁺⁻=$(round.(getindex.(buffer.F⁻F⁺,1);digits=4)) \t norm(r)=$(norm(r))")# \t d⁺=$(round(d⁺;digits=4)) \tr=$(round(norm(r);digits=10))")
-                if norm(r)<=newtonconv.restol || norm(dF)<=newtonconv.updatetol
+                #println("iter: $i \t  F⁺⁻=$(round.(getindex.(buffer.F⁻F⁺,1);digits=4)) \t norm(r)=$(norm(r))\t norm(dF)=$(norm(dF))")# \t d⁺=$(round(d⁺;digits=4)) \tr=$(round(norm(r);digits=10))")
+                if isapprox(diff(buffer.F⁻F⁺)[1][1],0.;atol=1e-7)
+                    buffer.isconvex[1] = true
+                    break
+                elseif norm(r)<=newtonconv.restol || norm(dF)<=newtonconv.updatetol
                     #println(" ")
                     return buffer.isconvex[1]
                 end
             end
-            error("no convexification convergence")
+            buffer.isconvex[1] || error("no convexification convergence F⁻F⁺=$(buffer.F⁻F⁺)")
         end
     end
+                        buffer.F⁻F⁺ .= F⁻F⁺₀
     buffer.isconvex[1] = true
     return buffer.isconvex[1]
 end
@@ -1837,17 +1841,21 @@ function convexify(newtonconv::NewtonConvexification1D, buffer::NewtonConvexific
     end
     # do newton iterations
     newtonconvexification!(newtonconv,buffer,f->W(f,xargs...))
-    buffer.F⁻F⁺ == sort(buffer.F⁻F⁺) || println("Fp und Fm sind vertauscht")
+    buffer.F⁻F⁺ == sort(buffer.F⁻F⁺) || println("Fp und Fm sind vertauscht F⁻F⁺=$(getindex.(buffer.F⁻F⁺,1))")
     sort!(buffer.F⁻F⁺) # in case newton did weired stuff
 
     # reorder below to be agnostic w.r.t. tension and compression
-    if buffer.F⁻F⁺[1][1] < F[1] < buffer.F⁻F⁺[2][1]
+    if !(buffer.isconvex[1]) && buffer.F⁻F⁺[1][1] < F[1] < buffer.F⁻F⁺[2][1]
         support_points = [buffer.F⁻F⁺[2:-1:1]...] #F⁺ F⁻ assumption
+        values_support_points = [W(s,xargs...) for s in support_points] # W⁺ W⁻ assumption
+        _perm = sortperm(values_support_points)
+        W_conv = values_support_points[_perm[1]] + ((values_support_points[_perm[2]] - values_support_points[_perm[1]])/(support_points[_perm[2]] - support_points[_perm[1]]))*(F - support_points[_perm[1]])
+        return W_conv, support_points[_perm[2]], support_points[_perm[1]]
     else
-        support_points = [F, F].+Tensor{2,1}.([(1e-10,),(-1e-10,)])
+        support_points = [F, F].+Tensor{2,1}.([(1e-14,),(-1e-14,)])
+        values_support_points = [W(s,xargs...) for s in support_points] # W⁺ W⁻ assumption
+        _perm = sortperm(values_support_points)
+        W_conv = W(F,xargs...)
+        return W_conv, support_points[_perm[2]], support_points[_perm[1]]
     end
-    values_support_points = [W(s,xargs...) for s in support_points] # W⁺ W⁻ assumption
-    _perm = sortperm(values_support_points)
-    W_conv = values_support_points[_perm[1]] + ((values_support_points[_perm[2]] - values_support_points[_perm[1]])/(support_points[_perm[2]] - support_points[_perm[1]]))*(F - support_points[_perm[1]])
-    return W_conv, support_points[_perm[2]], support_points[_perm[1]]
 end
