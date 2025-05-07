@@ -1771,7 +1771,7 @@ function newtonconvexification!(newtonconv::NewtonConvexification1D,buffer::Newt
     convex_estimate = diff(diff(Ws)./diff(Fs)).<=0
     F⁻F⁺₀ = deepcopy(buffer.F⁻F⁺)
     if !buffer.isconvex[1]
-        if any(convex_estimate) && abs(diff(buffer.F⁻F⁺)[1][1])>=(newtonconv.max_nonconvex_size*sum(buffer.F⁻F⁺)/2)[1]#convexity check
+        if any(convex_estimate) #&& abs(diff(buffer.F⁻F⁺)[1][1])>=(newtonconv.max_nonconvex_size*sum(buffer.F⁻F⁺)/2)[1]#convexity check
             for i in 1:300
                 drdf = ForwardDiff.jacobian(f->residualconvexification(newtonconv,f,W_fun), getindex.(buffer.F⁻F⁺,1))
                 r = residualconvexification(newtonconv,getindex.(buffer.F⁻F⁺,1),W_fun)
@@ -1780,7 +1780,7 @@ function newtonconvexification!(newtonconv::NewtonConvexification1D,buffer::Newt
                 #@show norm(r), norm(dF), buffer.F⁻F⁺
                 #d⁺ = ConvexDamage.damage_exponential(ConvexDamage.Ψ(tdot(Tensor{2,1}((F⁺⁻[1],))),mat.base_material);D₀=mat.D₀,D∞=mat.D∞)
                 #println("iter: $i \t  F⁺⁻=$(round.(getindex.(buffer.F⁻F⁺,1);digits=4)) \t norm(r)=$(norm(r))\t norm(dF)=$(norm(dF))")# \t d⁺=$(round(d⁺;digits=4)) \tr=$(round(norm(r);digits=10))")
-                if isapprox(diff(buffer.F⁻F⁺)[1][1],0.;atol=1e-7)
+                if isapprox(diff(buffer.F⁻F⁺)[1][1],0.;atol=1e-5)
                     buffer.isconvex[1] = true
                     break
                 elseif norm(r)<=newtonconv.restol || norm(dF)<=newtonconv.updatetol
@@ -1791,7 +1791,7 @@ function newtonconvexification!(newtonconv::NewtonConvexification1D,buffer::Newt
             buffer.isconvex[1] || error("no convexification convergence F⁻F⁺=$(buffer.F⁻F⁺)")
         end
     end
-                        buffer.F⁻F⁺ .= F⁻F⁺₀
+    buffer.F⁻F⁺ .= F⁻F⁺₀
     buffer.isconvex[1] = true
     return buffer.isconvex[1]
 end
