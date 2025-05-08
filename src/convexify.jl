@@ -507,11 +507,10 @@ end
 
 function iterator(i, mask; dir=1)
     # check input
-    dir in [1, -1] ? nothing : error("search direction must be either positive (1) or negative (-1)")
+    (dir ==1 || dir == -1) ? nothing : error("search direction must be either positive (1) or negative (-1)")
     ((i>=1) && (i<=length(mask))) ? nothing : error("tried to access vector entry at position "*string(i)*". Must lie between 1 and "*string(length(mask))*".")
     ~(mask[1] == 0) ? nothing : error("first entry of mask is not supposed to be set to false")
     ~(mask[end] == 0) ? nothing : error("last entry of mask is not supposed to be set to false")
-
     if dir == -1
         id_next = findlast(@view mask[1:(i==1 ? 1 : i-1)])
     else#if dir == 1
@@ -1705,6 +1704,7 @@ end
 Kernel function that implements the actual convexification without editing F and W in $\mathcal{O}(N)$.
 """
 function convexify_nonediting!(F, W, mask::Vector{Bool})
+    n=0
     for i in 3:length(F)
         n = iterator(i,mask;dir=-1)
         while n >=2 && ~is_convex((F[iterator(n,mask;dir=-1)], W[iterator(n,mask;dir=-1)]),(F[n], W[n]),(F[i], W[i]))
@@ -1764,14 +1764,15 @@ end
 
 function newtonconvexification!(newtonconv::NewtonConvexification1D,buffer::NewtonConvexificationBuffer1D,W_fun::Function)
     δ = 1e-10
-    Fs = range(buffer.F⁻F⁺[1],buffer.F⁻F⁺[2];length=20)
-    #Fs = diff(Fs)[1][1]<δ ?
-    #map.(x->Tensor{2,1}((x,)),collect(buffer.F⁻F⁺[1][1]:δ:buffer.F⁻F⁺[2][1])) : Fs
-    Ws = [W_fun(f) for f in Fs]
-    convex_estimate = diff(diff(Ws)./diff(Fs)).<=0
-    F⁻F⁺₀ = deepcopy(buffer.F⁻F⁺)
+    buffer.tempgrid.grid .= range(buffer.F⁻F⁺[1],buffer.F⁻F⁺[2];length=length(buffer.tempgrid.grid))
+    #buffer.tempgrid.grid = diff(buffer.tempgrid.grid)[1][1]<δ ?
+    #map.(x->Tensor{2,1}((x,)),collect(buffer.F⁻F⁺[1][1]:δ:buffer.F⁻F⁺[2][1])) : buffer.tempgrid.grid
+    buffer.tempgrid.values .= [W_fun(f) for f in buffer.tempgrid.grid]
+    convex_estimate = diff(diff(buffer.tempgrid.values)./diff(buffer.tempgrid.grid)).<=0
+    F⁻F⁺₀ = ones(typeof(buffer.F⁻F⁺[1]),2);
+    F⁻F⁺₀ .*= getindex.(buffer.F⁻F⁺,1)
     if !buffer.isconvex[1]
-        if any(convex_estimate) #&& abs(diff(buffer.F⁻F⁺)[1][1])>=(newtonconv.max_nonconvex_size*sum(buffer.F⁻F⁺)/2)[1]#convexity check
+        if any(convex_estimate)#&& abs(diff(buffer.F⁻F⁺)[1][1])>=(newtonconv.max_nonconvex_size*sum(buffer.F⁻F⁺)/2)[1]#convexity check
             for i in 1:300
                 drdf = ForwardDiff.jacobian(f->residualconvexification(newtonconv,f,W_fun), getindex.(buffer.F⁻F⁺,1))
                 r = residualconvexification(newtonconv,getindex.(buffer.F⁻F⁺,1),W_fun)
@@ -1780,11 +1781,11 @@ function newtonconvexification!(newtonconv::NewtonConvexification1D,buffer::Newt
                 #@show norm(r), norm(dF), buffer.F⁻F⁺
                 #d⁺ = ConvexDamage.damage_exponential(ConvexDamage.Ψ(tdot(Tensor{2,1}((F⁺⁻[1],))),mat.base_material);D₀=mat.D₀,D∞=mat.D∞)
                 #println("iter: $i \t  F⁺⁻=$(round.(getindex.(buffer.F⁻F⁺,1);digits=4)) \t norm(r)=$(norm(r))\t norm(dF)=$(norm(dF))")# \t d⁺=$(round(d⁺;digits=4)) \tr=$(round(norm(r);digits=10))")
-                if isapprox(diff(buffer.F⁻F⁺)[1][1],0.;atol=1e-5)
+                if isapprox(diff(buffer.F⁻F⁺)[1][1],0.;atol=1e-4)
                     buffer.isconvex[1] = true
                     break
                 elseif norm(r)<=newtonconv.restol || norm(dF)<=newtonconv.updatetol
-                    #println(" ")
+                    println(i*sizeof(r))
                     return buffer.isconvex[1]
                 end
             end
@@ -1797,16 +1798,19 @@ function newtonconvexification!(newtonconv::NewtonConvexification1D,buffer::Newt
 end
 
 function build_buffer(newtonconv::NewtonConvexification1D)
+    tempgrid = [Tensors.Tensor{2,1}((x,)) for x in range(0.,1.;length=20)]
+    tempvalues = zeros(Float64,20)
+    tempbuffer = ConvexificationBuffer1D(tempgrid,tempvalues)
     initgrid = [Tensors.Tensor{2,1}((x,)) for x in range(0.,1.;length=newtonconv.n_initgrid)]
     initvalues = zeros(Float64,length(initgrid))
     initbuffer = ConvexificationBuffer1D(initgrid,initvalues)
     updategrid = [Tensors.Tensor{2,1}((x,)) for x in range(0.,1.;length=newtonconv.n_updategrid)]
     updatevalues = zeros(Float64,length(updategrid))
     updatebuffer = ConvexificationBuffer1D(updategrid,updatevalues)
-    return NewtonConvexificationBuffer1D([true],[false],initbuffer,updatebuffer,Vector{typeof(initgrid[1])}(undef,2))
+    return NewtonConvexificationBuffer1D([true],[false],initbuffer,tempbuffer,updatebuffer,Vector{typeof(initgrid[1])}(undef,2))
 end
 
-function convexify(newtonconv::NewtonConvexification1D, buffer::NewtonConvexificationBuffer1D{T1}, W::FUN, F::T2, xargs::Vararg{Any,XN}) where {T1,FUN,T2,XN}
+function convexify(newtonconv::NewtonConvexification1D, buffer::NewtonConvexificationBuffer1D{T1,T3}, W::FUN, F::T2, xargs::Vararg{Any,XN}) where {T1,T3,FUN,T2,XN}
     # determine initial guess for newton iterations
     if buffer.first[1]
         buffer.first[1] = false
@@ -1847,8 +1851,8 @@ function convexify(newtonconv::NewtonConvexification1D, buffer::NewtonConvexific
 
     # reorder below to be agnostic w.r.t. tension and compression
     if !(buffer.isconvex[1]) && buffer.F⁻F⁺[1][1] < F[1] < buffer.F⁻F⁺[2][1]
-        support_points = [buffer.F⁻F⁺[2:-1:1]...] #F⁺ F⁻ assumption
-        values_support_points = [W(s,xargs...) for s in support_points] # W⁺ W⁻ assumption
+        support_points::Vector{T1} = [buffer.F⁻F⁺[2:-1:1]...] #F⁺ F⁻ assumption
+        values_support_points::Vector{T3} = [W(s,xargs...) for s in support_points] # W⁺ W⁻ assumption
         _perm = sortperm(values_support_points)
         W_conv = values_support_points[_perm[1]] + ((values_support_points[_perm[2]] - values_support_points[_perm[1]])/(support_points[_perm[2]] - support_points[_perm[1]]))*(F - support_points[_perm[1]])
         return W_conv, support_points[_perm[2]], support_points[_perm[1]]
