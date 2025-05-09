@@ -1785,7 +1785,6 @@ function newtonconvexification!(newtonconv::NewtonConvexification1D,buffer::Newt
                     buffer.isconvex[1] = true
                     break
                 elseif norm(r)<=newtonconv.restol || norm(dF)<=newtonconv.updatetol
-                    println(i*sizeof(r))
                     return buffer.isconvex[1]
                 end
             end
@@ -1851,8 +1850,8 @@ function convexify(newtonconv::NewtonConvexification1D, buffer::NewtonConvexific
 
     # reorder below to be agnostic w.r.t. tension and compression
     if !(buffer.isconvex[1]) && buffer.F⁻F⁺[1][1] < F[1] < buffer.F⁻F⁺[2][1]
-        support_points::Vector{T1} = [buffer.F⁻F⁺[2:-1:1]...] #F⁺ F⁻ assumption
-        values_support_points::Vector{T3} = [W(s,xargs...) for s in support_points] # W⁺ W⁻ assumption
+        support_points::Vector{promote_type(T1,typeof(F))} = [buffer.F⁻F⁺[2:-1:1]...] #F⁺ F⁻ assumption
+        values_support_points::Vector{promote_type(T3,typeof(W(F,xargs...)))} = [W(s,xargs...) for s in support_points] # W⁺ W⁻ assumption
         _perm = sortperm(values_support_points)
         W_conv = values_support_points[_perm[1]] + ((values_support_points[_perm[2]] - values_support_points[_perm[1]])/(support_points[_perm[2]] - support_points[_perm[1]]))*(F - support_points[_perm[1]])
         return W_conv, support_points[_perm[2]], support_points[_perm[1]]
