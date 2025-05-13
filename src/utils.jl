@@ -38,6 +38,17 @@ struct NewtonConvexificationBuffer1D{T1,T2} <: AbstractConvexificationBuffer
     F⁻F⁺::Vector{T1}
 end
 
+function Base.copy(buffer::NewtonConvexificationBuffer1D)
+    return NewtonConvexificationBuffer1D(
+                        [buffer.first[i] for i in 1:length(buffer.first)],
+                        [buffer.isconvex[i] for i in 1:length(buffer.isconvex)],
+                        buffer.initgrid,
+                        buffer.tempgrid,
+                        buffer.updategrid,
+                        [buffer.F⁻F⁺[i] for i in 1:length(buffer.F⁻F⁺)]
+                        )
+end
+
 # type piracy
 Base.isless(a::Tensors.Tensor{2,1,T,1}, b::Tensors.Tensor{2,1,T,1}) where T = a[1] < b[1]
 Base.isless(a::Tensors.Tensor{4,1,T,1}, b::Tensors.Tensor{4,1,T,1}) where T = a[1] < b[1]
