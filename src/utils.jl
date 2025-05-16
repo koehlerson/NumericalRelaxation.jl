@@ -13,6 +13,10 @@ struct ConvexificationBuffer1D{T1,T2} <: AbstractConvexificationBuffer
     values::Vector{T2}
 end
 
+function Base.copy(buffer::ConvexificationBuffer1D)
+    return ConvexificationBuffer1D(buffer.grid, buffer.values)
+end
+
 """
     AdaptiveConvexificationBuffer1D{T1,T2,T3} <: ConvexificationBuffer
 
