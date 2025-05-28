@@ -14,7 +14,7 @@ struct ConvexificationBuffer1D{T1,T2} <: AbstractConvexificationBuffer
 end
 
 function Base.copy(buffer::ConvexificationBuffer1D)
-    return buffer
+    return ConvexificationBuffer1D(buffer.grid, buffer.values)
 end
 
 """
