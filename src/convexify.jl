@@ -1776,7 +1776,7 @@ function newtonconvexification!(newtonconv::NewtonConvexification1D,buffer::Newt
             for i in 1:300
                 drdf = ForwardDiff.jacobian(f->residualconvexification(newtonconv,f,W_fun), getindex.(buffer.F⁻F⁺,1))
                 r = residualconvexification(newtonconv,getindex.(buffer.F⁻F⁺,1),W_fun)
-                dF = map(x->Tensor{2,1}((x,)),-(drdf\r))*min(0.01*i^2,1.)
+                dF = map(x->Tensor{2,1}((x,)),-(drdf\r))*min(0.001*i^2,1.)
                 buffer.F⁻F⁺ .+= dF
                 #@show norm(r), norm(dF), buffer.F⁻F⁺
                 #d⁺ = ConvexDamage.damage_exponential(ConvexDamage.Ψ(tdot(Tensor{2,1}((F⁺⁻[1],))),mat.base_material);D₀=mat.D₀,D∞=mat.D∞)
@@ -1800,32 +1800,33 @@ function build_buffer(newtonconv::NewtonConvexification1D)
     tempgrid = [Tensors.Tensor{2,1}((x,)) for x in range(0.,1.;length=20)]
     tempvalues = zeros(Float64,20)
     tempbuffer = ConvexificationBuffer1D(tempgrid,tempvalues)
-    initgrid = [Tensors.Tensor{2,1}((x,)) for x in range(0.,1.;length=newtonconv.n_initgrid)]
-    initvalues = zeros(Float64,length(initgrid))
-    initbuffer = ConvexificationBuffer1D(initgrid,initvalues)
+    #initgrid = [Tensors.Tensor{2,1}((x,)) for x in range(0.,1.;length=newtonconv.n_initgrid)]
+    #initvalues = zeros(Float64,length(initgrid))
+    #initbuffer = ConvexificationBuffer1D(initgrid,initvalues)
     updategrid = [Tensors.Tensor{2,1}((x,)) for x in range(0.,1.;length=newtonconv.n_updategrid)]
     updatevalues = zeros(Float64,length(updategrid))
     updatebuffer = ConvexificationBuffer1D(updategrid,updatevalues)
-    return NewtonConvexificationBuffer1D([true],[false],initbuffer,tempbuffer,updatebuffer,Vector{typeof(initgrid[1])}(undef,2))
+    return NewtonConvexificationBuffer1D([true],[false]#=,initbuffer=#,tempbuffer,updatebuffer,Vector{typeof(tempgrid[1])}(undef,2))
 end
 
 function convexify(newtonconv::NewtonConvexification1D, buffer::NewtonConvexificationBuffer1D{T1,T3}, W::FUN, F::T2, xargs::Vararg{Any,XN}) where {T1,T3,FUN,T2,XN}
     # determine initial guess for newton iterations
     if buffer.first[1]
+        initbuffer = ConvexificationBuffer1D(
+           [Tensors.Tensor{2,1}((x,)) for x in range(0.,1.;length=newtonconv.n_initgrid)],
+           zeros(Float64,newtonconv.n_initgrid)
+           )
         buffer.first[1] = false
         buffer.F⁻F⁺ .= Tensor{2,1}.([(newtonconv.F⁻F⁺ᵢₙᵢₜ[1],),(newtonconv.F⁻F⁺ᵢₙᵢₜ[2],)])
         while true
-            Fmp,valid = getnonconvexsupport(range(getindex.(buffer.F⁻F⁺,1)...; length=length(buffer.initgrid.grid)), buffer.initgrid, f->W(f,xargs...))
-            #println(buffer.F⁻F⁺)
+            Fmp,valid = getnonconvexsupport(range(getindex.(buffer.F⁻F⁺,1)...; length=length(initbuffer.grid)), initbuffer, f->W(f,xargs...))
             if valid
                 buffer.F⁻F⁺ .= Fmp;
-                #println(Fmp)
                 break;
             elseif buffer.F⁻F⁺[2][1] > newtonconv.F⁻F⁺ᵢₙᵢₜ[2]*newtonconv.increment^100
                 error("failed finding starting values")
             else
                 buffer.F⁻F⁺[2] *= newtonconv.increment
-                #println("\t $(buffer.F⁻F⁺[2])")
             end
         end
     elseif newtonconv.intermediate_graham
