@@ -51,6 +51,23 @@ function Base.copy(buffer::NewtonConvexificationBuffer1D)
                         buffer.updategrid,
                         [buffer.F⁻F⁺[i] for i in 1:length(buffer.F⁻F⁺)]
                         )
+@doc raw"""
+"""
+function save_buffer(buf::AdaptiveConvexificationBuffer1D,Fm,Fp,Wm,Wp,path::String;filename::String="")
+    n_coarse = length(buf.basebuffer.grid)
+    n_fine = length(buf.adaptivebuffer.grid)
+    filename = (filename == "") ? "ncoarse_$(n_coarse)_nadap_$(n_fine).jld2" : filename
+    if !isfile(path*filename)
+        JLD2.jldsave(path*filename,
+                c_grid=getindex.(buf.basebuffer.grid,1),
+                c_val=buf.basebuffer.values,
+                c_derivative=getindex.(buf.basegrid_∂²W,1),
+                f_grid=getindex.(buf.adaptivebuffer.grid,1),
+                f_val=buf.adaptivebuffer.values,
+                Fp=Fp[1],Fm=Fm[1],Wp=Wp,Wm=Wm)
+    else
+#        print("file is already there")
+    end
 end
 
 # type piracy

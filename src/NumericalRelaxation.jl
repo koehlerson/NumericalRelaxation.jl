@@ -8,6 +8,7 @@ using Interpolations
 using LinearAlgebra
 using JuMP, HiGHS
 import ForwardDiff
+import JLD2
 
 abstract type AbstractConvexification end
 abstract type AbstractConvexificationBuffer end

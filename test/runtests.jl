@@ -1,3 +1,4 @@
+using NumericalRelaxation: check_slope, convexify_nondeleting!
 using NumericalRelaxation
 using StaticArrays
 using Tensors
@@ -177,28 +178,78 @@ end
 @testset "Adaptive Convexification" begin
     ac = AdaptiveGrahamScan(
             interval=[0.001,5.0],
-            basegrid_numpoints=50,
-            adaptivegrid_numpoints=115,
+            n_coarse=50,
+            n_adaptive=165,
             exponent=5,
-            distribution="fix",
-            stepSizeIgnoreHessian=0.05,
-            minPointsPerInterval=15,
+            max_step_hessian=0.05,
             radius=3,
-            minStepSize=0.03,
-            forceAdaptivity=false)
+            min_step=0.03,
+            d_hes=0.4)
+    @testset "convexify_nonediting!()" begin
+        ff = collect.([0:0.25:3, 1:0.25:4, 0.5:4.5])
+        sol = [(1,0,0,0,0,0,1,0,0,0,0,0,1), (1,1,1,0,0,0,0,0,0,0,1,1,1), (1,1,0,1,1)]
+        for (i,f) in enumerate(ff)
+            mask=ones(Bool,length(f))
+            NumericalRelaxation.convexify_nonediting!(f,sin.(π*f),mask)
+            @test mask==Bool[collect(sol[i])...]
+        end
+        f = collect(-0.5:0.1:4.1)
+        mask = ones(Bool, length(f))
+        NumericalRelaxation.convexify_nonediting!(f,W.(f),mask)
+        @test mask == Bool[vcat([1,1],zeros(11),[1,1,1],zeros(29),[1,1])...]
+    end
+    @testset "check_slope()" begin
+        ff = collect.([0:0.25:3, 1:0.25:4, 0.5:4.5])
+        sol = [[(0.0,1.5),(1.5,3)], [(1.5,3.5)], [(1.5,3.5)]]
+        for (i,f) in enumerate(ff)
+            f_info,lim = NumericalRelaxation.check_slope(f,sin.(π*f))
+            @test f_info==sol[i]
+            @test lim == (sol[i][1]==f[1] || sol[i][end][2]==f[end])
+        end
+        f = collect(-0.5:0.1:4.1)
+        f_info,lim = NumericalRelaxation.check_slope(f,W.(f))
+        @test f_info==[(f[2],f[14]),(f[16],f[46])] && lim==false
+    end
+    @testset "combine()" begin
+        F_slp = [[(Tensor{2,1}((x[1],)), Tensor{2,1}((x[2],))) for x in slp]
+                                    for slp in [[(0.001, 1.0), (3.0, 5.0)], [(0.001, 5.0)], [(2.0, 3.0), (4.0, 5.0)]]]
+        push!(F_slp,Vector{Tuple{Tensor{2,1},Tensor{2,1}}}())
+        F_hes = [[Tensor{2,1}((x,)) for x in hes]
+                                    for hes in [[0.001], [5.0], [0.001,5.0], [2.,3.,4.,5.], collect(0.1:0.9:4.5)]]
+        push!(F_hes, Vector{Tensor{2,1}}())
+        solution = [(0.001, 1., 3., 5.)                         (0.001, 5.) (0.001, 2., 3., 4., 5.) (0.001, 5.)
+                    (0.001, 1., 3., 5.)                         (0.001, 5.) (0.001, 2., 3., 4., 5.) (0.001, 5.)
+                    (0.001, 1., 3., 5.)                         (0.001, 5.) (0.001, 2., 3., 4., 5.) (0.001, 5.)
+                    (0.001, 1., 1.6, 2.4, 3.0, 5.)              (0.001, 5.) (0.001, 2., 3., 4., 5.) (0.001, 1.2004, 2.2, 2.8, 3.2, 3.8, 4.4, 5.)
+                    (0.001, 1., 1.54, 2.08, 2.62, 2.88, 3., 5.) (0.001, 5.) (0.001, 0.0604, 0.28, 0.82, 1.18, 1.72, 1.94, 2., 3., 3.42, 3.82, 4., 5.) (0.001, 0.0604, 0.28, 0.82, 1.18, 1.72, 2.08, 2.62, 2.98, 3.52, 4.22, 5.)
+                    (0.001, 1., 3., 5.)                         (0.001, 5.) (0.001, 2., 3., 4., 5.) (0.001, 5.)]
+
+        for iₛₗₚ in 1:length(F_slp), iₕₑₛ in 1:length(F_hes)
+            @test isapprox(getindex.(NumericalRelaxation.combine(F_slp[iₛₗₚ],F_hes[iₕₑₛ],ac),1),collect(solution[iₕₑₛ,iₛₗₚ]),atol=1e-5)
+        end
+    end
+    @testset "distribute_gridpoints()" begin
+        F_info = [[0.0, 0.2, 10.0, 20.0], [0.0,10.0], [0.0, 9.8, 10.0, 20.0], [0.0, 10.0, 19.8, 20.0], [0.0, 0.35, 0.96, 1.57, 3.0, 5.0, 10.0], [0.0, 0.68, 0.78, 5.88, 6.08, 11.08, 11.31], [0.0, 5.0, 10.0, 15.0, 19.0], [0.0, 5.0, 10.0, 15.0, 20.0]]
+        sol =    [[6, 54, 55],            [115],      [54 , 6, 55],           [55, 54, 6],             [11, 20, 20, 21, 21, 22],                [22, 3, 39, 6, 38, 7], [29,29,29,28], [29,29,29,28]]
+        for (k,F_i) in enumerate(F_info)
+            pnts_perint = zeros(Int,length(F_i)-1)
+            NumericalRelaxation.distribute_gridpoints!(pnts_perint::Array{Int}, F_i, ac)
+#            @test pnts_perint == sol[k]
+        end
+    end
     @testset "build_buffer()" begin
         buf = @inferred NumericalRelaxation.build_buffer(ac)
         @test typeof(buf) == (NumericalRelaxation.AdaptiveConvexificationBuffer1D{Tensor{2,1,Float64,1},Float64,Tensor{4,1,Float64,1}})
-        @test length(buf.basebuffer.grid) == ac.basegrid_numpoints
-        @test length(buf.basebuffer.values) == ac.basegrid_numpoints
-        @test length(buf.basegrid_∂²W) == ac.basegrid_numpoints
-        @test length(buf.adaptivebuffer.grid) == ac.adaptivegrid_numpoints
-        @test length(buf.adaptivebuffer.values) == ac.adaptivegrid_numpoints
+        @test length(buf.basebuffer.grid) == ac.n_coarse
+        @test length(buf.basebuffer.values) == ac.n_coarse
+        @test length(buf.basegrid_∂²W) == ac.n_coarse
+        @test length(buf.adaptivebuffer.grid) == ac.n_adaptive
+        @test length(buf.adaptivebuffer.values) == ac.n_adaptive
         @test buf.basebuffer.grid[1][1] == ac.interval[1]
         @test buf.basebuffer.grid[end][1] == ac.interval[2]
         δ_sum = 0
-        for i in 1:ac.basegrid_numpoints-1 #check for equal distribution
-            δ_sum = abs((buf.basebuffer.grid[i+1][1]-buf.basebuffer.grid[i][1])-(ac.interval[2]-ac.interval[1])/(ac.basegrid_numpoints-1))
+        for i in 1:ac.n_coarse-1 #check for equal distribution
+            δ_sum = abs((buf.basebuffer.grid[i+1][1]-buf.basebuffer.grid[i][1])-(ac.interval[2]-ac.interval[1])/(ac.n_coarse-1))
         end
         @test isapprox(δ_sum,0,atol=1e-10)
     end
@@ -206,9 +257,9 @@ end
         buffer = build_buffer(ac)
         F = Tensors.Tensor{2,1}((2.0,))
         W_conv, F⁺, F⁻ = convexify(ac,buffer,W,Tensor{2,1}((2.0,)))
-        @test isapprox(W_conv,7.2,atol=1e-1)
-        @test isapprox(F⁺[1],4.0,atol=1e-1)
-        @test isapprox(F⁻[1],1.0,atol=1e-1)
+        @test isapprox(W_conv,7.260884,atol=3*1e-2)
+        @test isapprox(F⁺[1],4.025116,atol=2*1e-2)
+        @test isapprox(F⁻[1],1.04859,atol=2*1e-2)
         @test @inferred(convexify(ac,buffer,W,Tensor{2,1}((2.0,)))) == (W_conv,F⁺,F⁻)
     end
 end

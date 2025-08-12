@@ -1,6 +1,7 @@
 
 @doc raw"""
     GrahamScan{T<:Number} <: AbstractConvexification
+using Base: BufferStream
 
 Datastructure that implements in `convexify` dispatch the discrete one-dimensional convexification of a line without deletion of memory.
 This results in a complexity of $\mathcal{O}(N)$.
@@ -63,61 +64,214 @@ struct that stores all relevant information for adaptive convexification.
 
 # Fields
 - `interval::Vector{Float64}`
-- `basegrid_numpoints::Int64`
-- `adaptivegrid_numpoints::Int64`
+- `n_coarse::Int64`
+- `n_adaptive::Int64`
 - `exponent::Int64`
-- `distribution::String`
-- `stepSizeIgnoreHessian::Float64`
-- `minPointsPerInterval::Int64`
+- `max_step_hessian::Float64`
 - `radius::Float64`
-- `minStepSize::Float64`
-- `forceAdaptivity::Bool`
+- `min_step::Float64`
+- `d_hes::Number=0.4
 
 
 # Constructor
-    AdaptiveGrahamScan(interval; basegrid_numpoints=50, adaptivegrid_numpoints=115, exponent=5, distribution="fix", stepSizeIgnoreHessian=0.05, minPointsPerInterval=15, radius=3, minStepSize=0.03, forceAdaptivity=false)
+    AdaptiveGrahamScan(interval; n_coarse=50, n_adaptive=115, exponent=5, max_step_hessian=0.05, radius=3, min_step=0.03, d_hes=0.4)
 """
-Base.@kwdef struct AdaptiveGrahamScan <: AbstractConvexification
-    interval::Vector{Float64}
-    basegrid_numpoints::Int64 = 50
-    adaptivegrid_numpoints::Int64 = 115
-    exponent::Int64 = 5
-    distribution::String = "fix"
-    stepSizeIgnoreHessian::Float64 = 0.05     # minimale Schrittweite für die Hesse berücksichtigt wird
-    minPointsPerInterval::Int64 = 15
-    radius::Float64 = 3                       # nur relevant für: distribution = "fix"
-    minStepSize::Float64 = 0.03
-    forceAdaptivity::Bool = false
+struct AdaptiveGrahamScan <: AbstractConvexification
+    interval_init::Tuple{Float64,Float64}
+    interval::Vector{Float64}                   # current interval
+    adaption_rate::Float64
+    n_subintervals::Vector{Int64}
+    n_coarse::Int64
+#    h_coarse::Float64
+    h_adaptive::Float64
+    n_adaptive_per_subinterval::Int64
+    exponent::Int64
+    max_step_hessian::Float64                   # minimale Schrittweite für die Hesse berücksichtigt wird
+    radius::Float64
+    min_step::Float64
+    d_hes::Number                               # distance
+    function AdaptiveGrahamScan(;
+                        interval_init,
+                        #interval,
+                        adaption_rate=0.1,
+                        n_subintervals = 1,
+                        n_coarse = 1000,
+#                        h_coarse = 0.1,
+                        h_adaptive = 0.04,
+                        n_adaptive_per_subinterval = nothing,
+                        exponent = 5,
+                        max_step_hessian = 0.05,
+                        radius = 3,
+                        min_step = 0.02,
+                        d_hes = 0.4,
+                      )
+        adaption_rate<=0 ? error("adaption rate must be positive") : nothing
+        d_hes>=0.5 ? error("assigned value too large d_hes = $(d_hes) >= 0.5") : nothing
+        interval = collect(interval_init)
+        n_ada_subint = n_adaptive_per_subinterval == nothing ? Int(floor(floor((interval[2]-interval[1])/h_adaptive)/n_subintervals)) : n_adaptive_per_subinterval
+        h_adaptive < min_step ? error("'h_adaptive' cannot be smaller that 'min_step'") : nothing
+        (interval[2]-interval[1])/min_step < n_subintervals*n_ada_subint ? error("number of requested points per subinterval 'n_adaptive_per_subinterval' = $(n_ada_subint) violates minimal step size 'min_step' = $(min_step). Decrease 'n_adaptive_per_subinterval' (<= $((interval[2]-interval[1])/(min_step*n_subintervals))) or 'min_step' (<=$((interval[2]-interval[1])/(n_subintervals*n_ada_subint)))") : nothing
+        new(interval_init,interval,adaption_rate,[Int(n_subintervals)],n_coarse,h_adaptive,n_ada_subint,exponent,max_step_hessian,radius,min_step,d_hes)
+    end
 end
 
-δ(s::AdaptiveGrahamScan) = step(range(s.interval[1],s.interval[2],length=s.adaptivegrid_numpoints))
+#δ(s::AdaptiveGrahamScan) = step(range(s.interval[1],s.interval[2],length=s.n_adaptive))
 
 function build_buffer(ac::AdaptiveGrahamScan)
-    basegrid_F = [Tensors.Tensor{2,1}((x,)) for x in range(ac.interval[1],ac.interval[2],length=ac.basegrid_numpoints)]
-    basegrid_W = zeros(Float64,ac.basegrid_numpoints)
-    basegrid_∂²W = [Tensors.Tensor{4,1}((x,)) for x in zeros(Float64,ac.basegrid_numpoints)]
-    adaptivegrid_F = [Tensors.Tensor{2,1}((x,)) for x in zeros(Float64,ac.adaptivegrid_numpoints)]
-    adaptivegrid_W = zeros(Float64,ac.adaptivegrid_numpoints)
+    num_coarse, n_ada = get_buffer_sizes(ac)
+    # correction of step size, to ensure both borders are included
+    basegrid_F = [Tensors.Tensor{2,1}((x,)) for x in range(ac.interval[1],ac.interval[2],length=num_coarse)]
+    basegrid_W = zeros(Float64,num_coarse)
+    basegrid_∂²W = [Tensors.Tensor{4,1}((x,)) for x in zeros(Float64,num_coarse)]
+    # calculate number of adaptive grid points
+    adaptivegrid_F = [Tensors.Tensor{2,1}((x,)) for x in zeros(Float64,n_ada)]
+    adaptivegrid_W = zeros(Float64,n_ada)
+    # initialize sub buffers
     basebuffer = ConvexificationBuffer1D(basegrid_F,basegrid_W)
     adaptivebuffer = ConvexificationBuffer1D(adaptivegrid_F,adaptivegrid_W)
     return AdaptiveConvexificationBuffer1D(basebuffer,adaptivebuffer,basegrid_∂²W)
+end
+
+function validate_coarse_buffer(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D)
+    n_c,_ = get_buffer_sizes(ac::AdaptiveGrahamScan)
+    !(length(buffer.basebuffer.grid) == length(buffer.basebuffer.values) == length(buffer.basegrid_∂²W) == n_c) && error("inconsistent coarse buffer sizes")
+end
+
+function validate_adaptive_buffer(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D)
+    _,n_a = get_buffer_sizes(ac::AdaptiveGrahamScan)
+    !(length(buffer.adaptivebuffer.grid) == length(buffer.adaptivebuffer.values) == n_a) && error("inconsistent adaptive buffer sizes \n length(grid) = $(length(buffer.adaptivebuffer.grid))\n length(values) = $(length(buffer.adaptivebuffer.values))")
+end
+
+function init_coarsebuffer!(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::FUN, xargs::Vararg{Any,XN}) where {T1,T2,FUN,XN}
+        validate_coarse_buffer(ac,buffer)
+#println(length(buffer.basebuffer.grid))
+#println(length(buffer.adaptivebuffer.grid))
+        buffer.basebuffer.grid .= [Tensors.Tensor{2,1}((x,)) for x in range(ac.interval[1],ac.interval[2],length=length(buffer.basebuffer.grid))]
+        buffer.basebuffer.values .= [W(x, xargs...) for x in buffer.basebuffer.grid]
+        buffer.basegrid_∂²W .= [Tensors.hessian(i->W(i,xargs...), x) for x in buffer.basebuffer.grid]
+end
+
+function adapt_interval!(ac::AdaptiveGrahamScan,Fᵢ::Vector{Tuple{T,T}},F::T) where {T}
+    # extend intervall if F is within non_convex region that includes intervall limit
+    int_init = copy(ac.interval)
+    h_coarse = (ac.interval[2]-ac.interval[1])/ac.n_coarse
+    l_lim = !isempty(Fᵢ) && ac.interval[1]==Fᵢ[1][1][1] && (F[1]<Fᵢ[1][2][1]+h_coarse)
+    r_lim = !isempty(Fᵢ) && ac.interval[2]==Fᵢ[end][2][1] && (F[1]>Fᵢ[end][1][1]-h_coarse)
+    if l_lim || F[1] <= (1+ac.adaption_rate)*ac.interval[1]
+ #       println("\t 1: adapt_left (l_lim=$(l_lim) || border=$(F[1] <= (1+ac.adaption_rate)*ac.interval[1]))) ")
+        ac.interval[1] = (1-ac.adaption_rate)*ac.interval[1]
+    elseif r_lim || F[1] >= (1-ac.adaption_rate)*ac.interval[2]
+ #       println("\t 2: adapt_right (r_lim=$(r_lim) || border=$(F[1] >= (1-ac.adaption_rate)*ac.interval[2]))")
+        ac.interval[2] = (1+ac.adaption_rate)*ac.interval[2]
+    # shorten intervall if "orphaned" non-convexity can be identified
+#    elseif length(Fᵢ) >= 2
+#        print("\t 3: length(Fᵢ) >= 2 ")
+#        if F < Fᵢ[end-1][1]
+#            println("\t4: short_right \t len_F_i=$(length(Fᵢ)) \tac.int=$(ac.interval)")
+#            ac.interval[2] = (Fᵢ[end-1][2][1]+Fᵢ[end][1][1])/2
+#        elseif F > Fᵢ[2][2]
+#            println("\t5: short_left \t len_F_i=$(length(Fᵢ)) \tac.int=$(ac.interval)")
+#            ac.interval[1] = (Fᵢ[1][2][1]+Fᵢ[2][1][1])/2
+#        else
+#            println("\ti did nothing")
+#        end
+    end
+    return int_init!=ac.interval
+end
+
+function get_buffer_sizes(ac::AdaptiveGrahamScan)
+    n_c = ac.n_coarse
+#    n_c = Int(ceil((ac.interval[2]-ac.interval[1])/ac.h_coarse))
+    n_a = min( max(ac.n_subintervals[1]*ac.n_adaptive_per_subinterval,Int(floor((ac.interval[2]-ac.interval[1])/ac.h_adaptive))), Int(floor((ac.interval[2]-ac.interval[1])/ac.min_step))-ac.n_subintervals[1] )
+    return n_c,n_a
+end
+
+
+function resize_adaptive_buffer!(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D{T1,T2,T3}) where {T1,T2,T3}
+    _ , num_ada_desired = get_buffer_sizes(ac)
+    num_ada_current = length(buffer.adaptivebuffer.grid)
+    if num_ada_desired > num_ada_current
+        push!(buffer.adaptivebuffer.grid, zeros(T1,num_ada_desired-num_ada_current)...)
+        push!(buffer.adaptivebuffer.values, zeros(T2,num_ada_desired-num_ada_current)...)
+    elseif num_ada_desired < num_ada_current
+        deleteat!(buffer.adaptivebuffer.grid, num_ada_desired+1:num_ada_current)
+        deleteat!(buffer.adaptivebuffer.values, num_ada_desired+1:num_ada_current)
+    end
+end
+
+function resize_coarse_buffer!(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D{T1,T2,T3}) where {T1,T2,T3}
+    num_coarse_desired, _ = get_buffer_sizes(ac)
+    num_coarse_current = length(buffer.basebuffer.grid)
+#println("\tcurrently: num_c_cur=$(num_coarse_current), num_ad_cur=$(num_ada_current) \tresize to: num_co_des=$(num_coarse_desired) num_ad_des=$(num_ada_desired)")
+    if num_coarse_desired > num_coarse_current
+        push!(buffer.basebuffer.grid, zeros(T1,num_coarse_desired-num_coarse_current)...)
+        push!(buffer.basebuffer.values, zeros(T2,num_coarse_desired-num_coarse_current)...)
+        push!(buffer.basegrid_∂²W, zeros(T3,num_coarse_desired-num_coarse_current)...)
+    else num_coarse_desired < num_coarse_current
+        deleteat!(buffer.basebuffer.grid, num_coarse_desired+1:num_coarse_current)
+        deleteat!(buffer.basebuffer.values, num_coarse_desired+1:num_coarse_current)
+        deleteat!(buffer.basegrid_∂²W, num_coarse_desired+1:num_coarse_current)
+    end
+end
+
+function init_adaptivebuffer!(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D{T1,T2},Fᵢ::Vector{T1}, W::FUN, xargs::Vararg{Any,XN}) where {T1,T2,FUN,XN}
+    validate_adaptive_buffer(ac, buffer)
+    discretize_interval!(buffer.adaptivebuffer.grid, Fᵢ, ac)
+    for (i,x) in enumerate(buffer.adaptivebuffer.grid)
+        buffer.adaptivebuffer.values[i] = W(x, xargs...)
+    end
+end
+
+function update_n_subintervals!(ac::AdaptiveGrahamScan,Fᵢ::Vector{T}) where {T}
+    if ac.n_subintervals[1] == length(Fᵢ)-1
+        return false
+    else
+        ac.n_subintervals[1] = length(Fᵢ)-1
+        return true
+    end
 end
 
 @doc raw"""
     convexify(adaptivegraham::AdaptiveGrahamScan{T2}, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::FUN, F::T1, xargs::Vararg{Any,XN}) where {T1,T2,FUN,XN}  -> W_convex::Float64, F⁻::Tensor{2,1}, F⁺::Tensor{2,1}
 Function that implements the adaptive Graham's scan convexification without deletion in $\mathcal{O}(N)$.
 """
-function convexify(adaptivegraham::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::FUN, F::T1, xargs::Vararg{Any,XN}) where {T1,T2,FUN,XN}
-    #init function values **and grid** on coarse grid
-    buffer.basebuffer.values .= [W(F, xargs...) for x in buffer.basebuffer.grid]
-    buffer.basegrid_∂²W .= [Tensors.hessian(i->W(i,xargs...), x) for x in buffer.basebuffer.grid]
+function convexify(ac::AdaptiveGrahamScan, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::FUN, F::T1, xargs::Vararg{Any,XN}) where {T1,T2,FUN,XN}
+#println("hi")
+    cnt = 0
+    has_changed = true
+    Fᵢ = Vector{T1}()
+    while has_changed
+        if cnt<=100
+            cnt+=1
+        else
+            init_coarsebuffer!(ac, buffer, W, xargs...)
+            # inspect coarse buffer
+#JLD2.jldsave("test.jl",buffer=buffer,ac=ac)
+            Fₕₑₛ = check_hessian(ac, buffer)
+            Fₛₗₚ = check_slope(buffer,F)
+            Fᵢ, Fᵢₜ = combine(Fₛₗₚ, Fₕₑₛ, ac)
+            @warn "\n\n\n\nran into counter limit \nW = $(W)\n F = $(F)\n F_info=$(Fᵢ)\n ac=$(ac)\n F_slp=$(Fₛₗₚ)\nF_hes=$(Fₕₑₛ)\n\n\n\n";
+            error("apropriate buffer size cannot be determined");
+        end
+        #init function values **and grid** on coarse grid
+        init_coarsebuffer!(ac, buffer, W, xargs...)
 
-    #construct adpative grid
-    adaptive_1Dgrid!(adaptivegraham, buffer)
-    #init function values on adaptive grid
-    for (i,x) in enumerate(buffer.adaptivebuffer.grid)
-        buffer.adaptivebuffer.values[i] = W(x, xargs...)
+        # inspect coarse buffer
+        Fₕₑₛ = check_hessian(ac, buffer)
+        Fₛₗₚ = check_slope(buffer,F)
+        Fᵢ, Fᵢₜ = combine(Fₛₗₚ, Fₕₑₛ, ac)
+
+        has_changed = adapt_interval!(ac,Fᵢₜ,F)
+        has_changed && resize_coarse_buffer!(ac,buffer)
     end
+ #   end
+
+    #init function values on adaptive grid
+ #   t2= @elapsed begin
+    update_n_subintervals!(ac,Fᵢ)
+    resize_adaptive_buffer!(ac,buffer)
+    init_adaptivebuffer!(ac,buffer,Fᵢ,W,xargs...)
+
     #convexify
     convexgrid_n = convexify_nondeleting!(buffer.adaptivebuffer.grid,buffer.adaptivebuffer.values)
     # return W at F
@@ -127,7 +281,13 @@ function convexify(adaptivegraham::AdaptiveGrahamScan, buffer::AdaptiveConvexifi
     support_points = [buffer.adaptivebuffer.grid[id⁺],buffer.adaptivebuffer.grid[id⁻]] #F⁺ F⁻ assumption
     values_support_points = [buffer.adaptivebuffer.values[id⁺],buffer.adaptivebuffer.values[id⁻]] # W⁺ W⁻ assumption
     _perm = sortperm(values_support_points)
+
+#    save_buffer(buffer,support_points[_perm]...,values_support_points[_perm]... ,"/home/jmelchior/Dokumente/repos/convexified-damage/data/simulations/calibration/1D/reconvexify/temp/";filename="F_$(round(F[1];sigdigits=4))_ncoarse_$(ac.n_coarse)_nadap_$(ac.n_adaptive).jld2")
+
+
     W_conv = values_support_points[_perm[1]] + ((values_support_points[_perm[2]] - values_support_points[_perm[1]])/(support_points[_perm[2]][1] - support_points[_perm[1]][1]))*(F[1] - support_points[_perm[1]][1])
+  #  end
+#println("coarse_time=$(t1) \t adaptive_time=$(t2)")
     return W_conv, support_points[_perm[2]], support_points[_perm[1]]
 end
 
@@ -154,6 +314,20 @@ function convexify_nondeleting!(F, W)
     return n
 end
 
+@doc raw"""
+    convexify_nonediting!(F, W, mask::Vector{Bool})
+Kernel function that implements the actual convexification without editing F and W in $\mathcal{O}(N)$.
+"""
+function convexify_nonediting!(F, W, mask::Vector{Bool})
+    for i in 3:length(F)
+        n = iterator(i,mask;dir=-1)
+        while n >=2 && ~is_convex((F[iterator(n,mask;dir=-1)], W[iterator(n,mask;dir=-1)]),(F[n], W[n]),(F[i], W[i]))
+            mask[n]=0
+            n = iterator(i,mask;dir=-1)
+        end
+    end
+end
+
 ####################################################
 ####################################################
 ##########  Adaptive 1D utility functions ##########
@@ -161,7 +335,6 @@ end
 ####################################################
 
 struct Polynomial{T1<:Union{Float64,Tensors.Tensor{2,1}}}
-    distribution::String
     F::T1
     ΔF::T1
     exponent::Int64
@@ -175,25 +348,15 @@ struct Polynomial{T1<:Union{Float64,Tensors.Tensor{2,1}}}
     c::T1
     d::T1
     e::T1
-    function Polynomial(F::T, ΔF::T, numpoints::Int, ac::AdaptiveGrahamScan) where {T}#exponent::Int, numpoints, distribution="fix", r=1.0, hₘᵢₙ=0.00001) where {T}
-        if ac.distribution == "var"
-            c = F
-            b = one(T)* ac.minStepSize
-            a = one(T)* (2/numpoints)^ac.exponent*(ΔF[1]/2-ac.minStepSize*numpoints/2)
-            d = one(T)* 0.0
-            e = one(T)* 0.0
-            n = 0.0
-            rad = copy(ac.radius)
-        elseif ac.distribution == "fix"
-            rad =  ac.radius<ΔF[1]/2 ? ac.radius/1 : ΔF[1]/2
-            c = F
-            b = one(T)* ac.minStepSize
-            d = one(T)* (1/(2*numpoints)*(sqrt((ΔF[1]-(ac.exponent-1)*(b[1]*numpoints-2*rad))^2+4*b[1]*numpoints*(ac.exponent-1)*(ΔF[1]-2*rad))-b[1]*numpoints*ac.exponent+b[1]*numpoints+ΔF[1]+2*ac.exponent*rad-2*rad))
-            n = (rad-ΔF[1]/2)/d[1]+numpoints/2
-            e = F+ΔF/2-d*numpoints/2
-            a = (d-b)/(ac.exponent*n^(ac.exponent-1))
-        end
-        return new{T}(ac.distribution, F, ΔF, ac.exponent, numpoints, ac.minStepSize, rad, n, a, b, c, d, e)
+    function Polynomial(F::T, ΔF::T, numpoints::Int, ac::AdaptiveGrahamScan) where {T}
+        rad =  ac.radius<ΔF[1]/2 ? ac.radius/1 : ΔF[1]/2
+        c = F
+        b = one(T)* ac.min_step
+        d = one(T)* (1/(2*numpoints)*(sqrt((ΔF[1]-(ac.exponent-1)*(b[1]*numpoints-2*rad))^2+4*b[1]*numpoints*(ac.exponent-1)*(ΔF[1]-2*rad))-b[1]*numpoints*ac.exponent+b[1]*numpoints+ΔF[1]+2*ac.exponent*rad-2*rad))
+        n = (rad-ΔF[1]/2)/d[1]+numpoints/2
+        e = F+ΔF/2-d*numpoints/2
+        a = (d-b)/(ac.exponent*n^(ac.exponent-1))
+        return new{T}(F, ΔF, ac.exponent, numpoints, ac.min_step, rad, n, a, b, c, d, e)
     end
 end
 
@@ -214,294 +377,152 @@ The resultiong grid will be broadcasted into `ac_buffer.adaptivebuffer.grid`.
 F⁺⁻ will be determined by checking the slope of mathematical function W(F). Start and end
 points of non-convex subintervals will be stored. Additionally all minima of ∂²W(F) serve
 as points of interest as well (only if step size at this point is greater than
-`ac.stepSizeIgnoreHessian`).
+`ac.max_step_hessian`).
 """
-function adaptive_1Dgrid!(ac::AdaptiveGrahamScan, ac_buffer::AdaptiveConvexificationBuffer1D{T1,T2,T3}) where {T1,T2,T3}
+function adaptive_1Dgrid!(ac::AdaptiveGrahamScan, ac_buffer::AdaptiveConvexificationBuffer1D{T1,T2,T3},F::T) where {T1,T2,T3,T}
     Fₕₑₛ = check_hessian(ac, ac_buffer)
-    Fₛₗₚ = check_slope(ac_buffer)
-    F⁺⁻ = combine(Fₛₗₚ, Fₕₑₛ)
-    discretize_interval(ac_buffer.adaptivebuffer.grid, F⁺⁻, ac)
-    return F⁺⁻
+    Fₛₗₚ, l_lim, r_lim = check_slope(ac_buffer,F)
+    Fᵢ = combine(Fₛₗₚ, Fₕₑₛ, ac)
+    discretize_interval!(ac_buffer.adaptivebuffer.grid, Fᵢ, ac)
+    return Fᵢ, l_lim, r_lim
 end
 
-function check_hessian(∂²W::Vector{T2}, F::Vector{T1}, params::AdaptiveGrahamScan) where {T1,T2}
+function inspect_coarse(ac::AdaptiveGrahamScan, ac_buffer::AdaptiveConvexificationBuffer1D{T1,T2,T3},F::T) where {T1,T2,T3,T}
+    Fₕₑₛ = check_hessian(ac, ac_buffer)
+    Fₛₗₚ, l_lim, r_lim = check_slope(ac_buffer,F)
+
+    Fᵢ = combine(Fₛₗₚ, Fₕₑₛ, ac)
+    return Fᵢ, l_lim, r_lim
+end
+
+function check_hessian(∂²W::Vector{T2}, F::Vector{T1}, ac::AdaptiveGrahamScan) where {T1,T2}
     length(∂²W) == length(F) ? nothing : error("cannot process arguments of different length.")
     Fₕₑₛ = zeros(T1,0)
     for i in 2:length(∂²W)-1
-        if (∂²W[i][1] < ∂²W[i-1][1]) && (∂²W[i][1] < ∂²W[i+1][1]) && ((F[i+1][1]-F[i-1][1])/2 > params.stepSizeIgnoreHessian)
+        if (∂²W[i][1] < ∂²W[i-1][1]) && (∂²W[i][1] < ∂²W[i+1][1]) && ((F[i+1][1]-F[i-1][1])/2 > ac.max_step_hessian)
             push!(Fₕₑₛ,F[i])
         end
     end
     return Fₕₑₛ
 end
 
-function check_hessian(params::AdaptiveGrahamScan, ac_buffer::AdaptiveConvexificationBuffer1D)
-    return check_hessian(ac_buffer.basegrid_∂²W, ac_buffer.basebuffer.grid, params)
+function check_hessian(ac::AdaptiveGrahamScan, ac_buffer::AdaptiveConvexificationBuffer1D)
+    return check_hessian(ac_buffer.basegrid_∂²W, ac_buffer.basebuffer.grid, ac)
 end
 
-function check_slope(ac_buffer::AdaptiveConvexificationBuffer1D)
-    return check_slope(ac_buffer.basebuffer.grid,ac_buffer.basebuffer.values)
+function check_slope(ac_buffer::AdaptiveConvexificationBuffer1D,F)
+    return check_slope(ac_buffer.basebuffer.grid,ac_buffer.basebuffer.values,F)
 end
 
-function check_slope(F::Vector{T2}, W::Vector{T1}) where {T2,T1}
+function check_slope(F::Vector{T2}, W::Vector{T1},F_eval::T) where {T2,T1,T}
+    # determin convex hull
     mask = ones(Bool,length(F))
-    i = 1   # linker Iterator
-    k = 2   # rechter Iterator
-    r = iterator(k, mask; dir=1) # r = 3
-    flag_l = false
-    flag_r = false
-    while r < length(W)
-        r = iterator(k, mask; dir=1) # temp iterator
-        if ~is_convex((F[i],W[i]), (F[k],W[k]), (F[r],W[r]))
-            int_konvex_l = true
-            int_konvex_r = false
-            while ~(int_konvex_l && int_konvex_r)
-                r = iterator(k, mask; dir=1)
-                #k nach rechts bis rechte Seite konvex
-                if r < length(W)    #falls rand des Intervalls erreicht....
-                    r = iterator(k, mask; dir=1)
-                    while ~is_convex((F[i],W[i]), (F[k],W[k]), (F[r],W[r]))
-                        mask[k] = 0
-                        if r == length(W)
-                            flag_r = true
-                            break
-                        end
-                        k = iterator(k, mask; dir=1)
-                        r = iterator(k, mask; dir=1)
-                        int_konvex_l = false
-                    end
-                elseif ~flag_r      #....Warnung ausgeben
-                    mask[k] = 0
-                    k = iterator(k, mask; dir=1)
-                    flag_r = true
-                end
-                int_konvex_r = true
-                #i nach links bis linke Seite konvex
-                if i > 1    #falls rand des Intervalls erreicht....
-                    l = iterator(i, mask; dir=-1)
-                    while ~is_convex((F[l],W[l]), (F[i],W[i]), (F[k],W[k]))
-                        mask[i] = 0
-                        if l == 1
-                            flag_l = true
-                            break
-                        end
-                        i = iterator(i, mask; dir=-1)
-                        l = iterator(i, mask; dir=-1)
-                        int_konvex_r = false
-                    end
-                elseif ~flag_l      #....Warnung ausgeben
-                    flag_l = true
-                end
-                int_konvex_l = true
-            end
-        else
-            i = iterator(i, mask; dir=1)
-            k = iterator(k, mask; dir=1)
-        end
+    convexify_nonediting!(F,W,mask)
+
+    # write non convex intervals into F_info
+    F_info = Vector{Tuple{typeof(F[1]),typeof(F[1])}}()
+    for i in 1:length(F)
+        i>1 && (mask[i-1]==0) && (mask[i]==1) ? (F_info[end]=(F_info[end][1],F[i])) : nothing
+        i<length(F) && (mask[i]==1) && (mask[i+1]==0) && push!(F_info,(F[i],zero(F[i])))
     end
 
-    F_info = zeros(typeof(F[1]),1)
-    F_info[1] = F[1]
-    #if flag_l
-    #    @info("linker Rand in nicht konveFem Bereich")
-    #end
+    # only throw error if F is within non-convex region
+    #r_lim = (mask[end-1]==0) && (F_eval>F_info[end][1])
+    #l_lim = (mask[2]==0) && (F_eval<F_info[1][2])
 
-    for i in 1:length(F)-1
-        if (mask[i]==0) && (mask[i+1]==1)
-            push!(F_info,F[i+1])
-        elseif (mask[i]==1) && (mask[i+1]==0)
-            push!(F_info,F[i])
-        end
-    end
-    #if flag_r
-    #    @info("rechter Rand in nicht konvexem Bereich")
-    #end
-    push!(F_info,F[end])
-    return F_info
+    return F_info #, l_lim, r_lim
 end
 
-function combine(X_slp::Array{T}, X_hes::Array{T},d=0.4::AbstractFloat) where {T}
-    # X_HEssian --> aus ∂²W∂x² extrahierte Minima.
-    # X_Slope --> aus den Funktionswerten herausgefiltertete Start- und Endpunkte nicht konv. Bereiche
-    #=d       --> relative Distanz zwischen Minima in X_Hessian und nächstem/vorherigem Punkt an dem
-                  Intervallgrenze gesetzt werden soll =#
-    X_Slp = copy(X_slp)
-    X_Hes = copy(X_hes)
-    for i in 1:length(X_Hes)
-        X_Hes[i]>X_Slp[1] && X_Hes[i]<X_Slp[end] ? nothing : error("X_Hes[$i]=$(X_Hes[i][1]) not within interval [$(X_Slp[1][1]), $(X_Slp[end][1])]")
+function _get_rel_pos(F::T, F_int::Tuple{T,T}) where {T}
+    return F[1]>=F_int[1][1] && F[1]<=F_int[2][1] ? 2 : (F[1]<F_int[1][1] ? 1 : 3)
+end
+
+function combine(Fₛₗₚ::Array{Tuple{T,T}}, Fₕₑₛ::Array{T}, ac::AdaptiveGrahamScan) where {T}
+    #d: relative Distanz zwischen Minima in F_hessian und nächstem/vorherigem Punkt an dem Intervallgrenze gesetzt werden soll
+    F_slp = vcat((one(T)*-Inf,one(T)*ac.interval[1]), copy(Fₛₗₚ), (one(T)*ac.interval[2],one(T)*Inf))
+    F_hes = copy(Fₕₑₛ)
+
+    # count number of hes vals to ignore
+    cnt = 0
+    for i in 1:length(F_hes) for j in 1:length(F_slp)
+        _get_rel_pos(F_hes[i],F_slp[j])==2 ? begin cnt+=1; break end : nothing
+    end end
+
+    # initialize F_info vector
+    F_i = typeof(F_slp)(undef,length(F_slp)+length(F_hes)-cnt)
+
+    # fill f_info
+    iᵢₙ = 1
+    for iₛₗₚ in 1:length(F_slp)
+        F_i[iᵢₙ]=F_slp[iₛₗₚ]
+        iₛₗₚ==length(F_slp) ? break : iᵢₙ += 1
+        for iₕₑₛ in 1:length(F_hes)
+            _get_rel_pos(F_hes[iₕₑₛ],F_slp[iₛₗₚ])==3 && _get_rel_pos(F_hes[iₕₑₛ],F_slp[iₛₗₚ+1])==1 ?
+                                                    begin F_i[iᵢₙ] = (F_hes[iₕₑₛ],F_hes[iₕₑₛ]); iᵢₙ+=1 end : nothing
+        end
     end
-    if d>0.4999
-        d = 0.4999
-    end
-    if ~isempty(X_Hes)
-        X_mtrx_1 = ones(T,length(X_Slp)+length(X_Hes))
-        X_mtrx_2 = ones(Int64,length(X_Slp)+length(X_Hes))
-        j = 1; # Iterator für X_Slp
-        k = 1; # Iterator für X_Hes
 
-        push!(X_Hes,X_Slp[end]+one(T))  # damit Schleife auf Index [end+1] zugreifen kann
-
-         # Konstruktionsmatrix erzeugen
-            #= z.B.
-            [X_mtrx_1 ^T =   [0.001 0.501 0.701 1.001 1.201 2.901 5.001;
-             X_mtrx_2]        1     2     1     0     1     1     1     ]
-            -> 1. Zeile: koordinaten relevanter Punkte (Minimum Hesse oder Start/Ende konvexer Berch)
-            -> 2. Zeile: 1 -> aus X_Slp; 2/0 -> aus X_Hes;  =#
-
-        for i in 1:length(X_mtrx_1)
-            if X_Slp[j][1] > X_Hes[k][1]
-                X_mtrx_1[i] = X_Hes[k]
-                X_mtrx_2[i] = iseven(j) ? 2 : 0 # Marker -> X_Hes in konvx Bereich (0) sonst (2)
-                k += 1
-            elseif X_Slp[j][1] < X_Hes[k][1]
-                X_mtrx_1[i] = X_Slp[j]
-                j += 1
+    # resolve F_hes entries in F_i
+    offs = zero(T)
+    for k in 1:length(F_i)
+        if F_i[k][1] == F_i[k][2]
+            if F_i[k+1][1] == F_i[k+1][2]
+                F_i[k],offs =
+                        ((F_i[k][1]-ac.d_hes*(F_i[k][1]-(F_i[k-1][2]+offs)), F_i[k][2]+ac.d_hes*(F_i[k+1][1]-F_i[k][2])/2), (1-ac.d_hes)*(F_i[k+1][1]-F_i[k][2])/2)
             else
-                X_mtrx_1[i] = X_Hes[k]
-                X_mtrx_2[i] = 0
-                k+=1
+                F_i[k],offs =
+                        ((F_i[k][1]-ac.d_hes*(F_i[k][1]-F_i[k-1][2]-offs), F_i[k][2]+ac.d_hes*(F_i[k+1][1]-F_i[k][2])), zero(T))
             end
         end
-        # X_res aus Konstruktionsmatrix zusammensetzen
-        X_res = zeros(T,Int(sum(X_mtrx_2[1:end])))
-        j = 1
-        for i in 1:length(X_mtrx_1)
-            if X_mtrx_2[i] == 1
-                X_res[j] = X_mtrx_1[i]
-                j += 1
-            elseif X_mtrx_2[i] == 2
-                X_res[j] = X_mtrx_1[i] - d*(X_mtrx_1[i]-X_mtrx_1[i-1])
-                X_res[j+1] = X_mtrx_1[i] + d*(X_mtrx_1[i+1]-X_mtrx_1[i])
-                j += 2
-            end
-        end
-
-        return unique(X_res)
-    else
-        return unique(X_Slp)
     end
+    return unique(vcat(collect.(F_i)...)[2:end-1]), deepcopy(F_i[2:end-1])
 end
 
-function discretize_interval(Fₒᵤₜ::Array{T}, F⁺⁻::Array{T}, ac::AdaptiveGrahamScan) where {T}
-    if (length(F⁺⁻) > 2) || (ac.forceAdaptivity) # is function convex ?
-        numIntervals = length(F⁺⁻)-1
-        gridpoints_oninterval = Array{Int64}(undef,numIntervals)
-        distribute_gridpoints!(gridpoints_oninterval, F⁺⁻, ac)
-        # ================================================================================
-        # ====================================  fill vector ==============================
-        # ================================================================================
-        ∑gridpoints = sum(gridpoints_oninterval)
-        ∑j = 0
-        for i=1:numIntervals
-            P = Polynomial(F⁺⁻[i],F⁺⁻[i+1]-F⁺⁻[i], gridpoints_oninterval[i], ac)
-            j = 0
-            while j < gridpoints_oninterval[i]
-                Fₒᵤₜ[∑j+j+1] = project(P,j)
-                j += 1
-            end
-            ∑j += gridpoints_oninterval[i];
-        end
-        Fₒᵤₜ[end] = F⁺⁻[end]
-        return nothing
-    else # if function already convex
-        Fₒᵤₜ .= collect(range(F⁺⁻[1],F⁺⁻[2]; length=ac.adaptivegrid_numpoints))
-        return nothing
+function discretize_interval!(Fₒᵤₜ::Array{T}, F_info::Array{T}, ac::AdaptiveGrahamScan) where {T}
+    # is function convex ?
+    if length(F_info) <= 2
+        Fₒᵤₜ .= collect(range(F_info[1],F_info[2]; length=length(Fₒᵤₜ)))
+        return
     end
+
+    # calculate number of gridpoints per interval
+    pnts_perint = Array{Int64}(undef,length(F_info)-1)
+    distribute_gridpoints!(pnts_perint, F_info, ac)
+#println(get_buffer_sizes(ac))
+#println(length(Fₒᵤₜ))
+    # calculate actual position of each gridpoint
+    for i=1:length(F_info)-1
+        P = Polynomial(F_info[i],F_info[i+1]-F_info[i], pnts_perint[i], ac)
+        rnge = (sum(pnts_perint[1:(i-1)])+1) .+ collect(0:(pnts_perint[i]-1))
+        Fₒᵤₜ[rnge] .= project.(0:(pnts_perint[i]-1),(P,))
+    end
+    Fₒᵤₜ[end] = F_info[end]
 end
 
-function inv_m(mask::Array{T}) where {T}
-    return ones(T,size(mask)) - mask
-end
+function distribute_gridpoints!(pnts_perint::Array{Int}, F_info::Array, ac::AdaptiveGrahamScan)
+    pnts_perint .= zeros(Int,length(F_info)-1)
+    #check if min step size allows for equal distribution of points
+    int = [F_info[i+1][1]-F_info[i][1] for i in 1:length(F_info)-1]
+    _, n_adaptive = get_buffer_sizes(ac)
+    for (i,ip) in enumerate(sortperm(int))
+        (n_adaptive-sum(pnts_perint))/(length(F_info)-i) >
+                             (int[ip])/ac.min_step ? pnts_perint[ip] = Int(floor((int[ip])/ac.min_step)) : break
+    end
 
-function distribute_gridpoints!(vecₒᵤₜ::Array, F⁺⁻::Array, ac::AdaptiveGrahamScan)
-    numIntervals = length(F⁺⁻)-1
-    gridpoints_oninterval = copy(vecₒᵤₜ)
-    if ac.distribution == "var"
-        # ================================================================================
-        # ================= Stuetzstellen auf Intervalle aufteilen =======================
-        # ================================================================================
-        for i=1:numIntervals
-            gridpoints_oninterval[i] = Int(round((F⁺⁻[i+1]-F⁺⁻[i])/(F⁺⁻[end]-F⁺⁻[1]) * (ac.adaptivegrid_numpoints-1)))
+    # distribute remaining points evenly on remaining intervals
+    remaining_points = n_adaptive-sum(pnts_perint)
+    activeint = iszero.(pnts_perint)
+    for (i,ip) in enumerate(sortperm(int.*activeint,rev=true))
+        if activeint[ip]
+            addpoint = i<=remaining_points%sum(activeint) ? 1 : 0
+            pnts_perint[ip] = floor(remaining_points/sum(activeint)) + addpoint
         end
-        # ================================================================================
-        # ======== korrektur --> um vorgegebene Anzahl an Gitterpunkten einzuhalten ======
-        # ================================================================================
-        # normierung
-        norm_gridpoints_oninterval = gridpoints_oninterval/sum(gridpoints_oninterval)
-        gridpoints_oninterval = Int.(round.(norm_gridpoints_oninterval*(ac.adaptivegrid_numpoints-1)))
-        # Mindestanzahl eingehlaten?
-        for i in 1:length(gridpoints_oninterval)
-            gridpoints_oninterval[i] = max(ac.minPointsPerInterval,gridpoints_oninterval[i])
-        end
-        # differenz ausgleichen
-        ∑gridpoints = sum(gridpoints_oninterval)
-        if ∑gridpoints != (ac.adaptivegrid_numpoints-1)
-            dif = (ac.adaptivegrid_numpoints-1) - ∑gridpoints
-            iₘₐₓ = 1
-            for i in 2:numIntervals
-                gridpoints_oninterval[i]>gridpoints_oninterval[iₘₐₓ] ? iₘₐₓ = i : ()
-            end
-            gridpoints_oninterval[iₘₐₓ] += dif
-        end
-        # Einträge übertragen
-        vecₒᵤₜ .= gridpoints_oninterval
-        return nothing
-    elseif ac.distribution == "fix"
-        mask_active = ones(Bool, numIntervals)
-        mask_active_last = zeros(Bool, numIntervals)
-        cnt = 1
-        while (sum(mask_active_last-mask_active)!=0) && (cnt<=10)
-            # ================================================================================
-            # ================= Stuetzstellen auf Intervalle aufteilen =======================
-            # ================================================================================
-            mask_active_last = copy(mask_active)
-            activeIntervals = sum(mask_active)
-            activeIntervals==0 ? error("Could not distribute grid points among intervalls. Try to reduce number of grid points or decrease minimum step size.") : nothing
-            numGridpointsOnRadius =
-                Int(round( (ac.adaptivegrid_numpoints-1-sum(gridpoints_oninterval.*inv_m(mask_active)))
-                /(activeIntervals) ))
-            radPol = Polynomial(0.0,2*ac.radius, numGridpointsOnRadius, ac)
-            hₘₐₓ =
-                (project(radPol, numGridpointsOnRadius/2+0.001)
-                -project(radPol, numGridpointsOnRadius/2-0.001)) / 0.002
-            for i in 1:numIntervals
-                if mask_active[i] == 1
-                    linPartOfF = max((F⁺⁻[i+1][1]-F⁺⁻[i][1])-2*ac.radius,0)
-                    gridpoints_oninterval[i] =
-                        Int(round( (ac.adaptivegrid_numpoints-1)/(activeIntervals) + linPartOfF/hₘₐₓ ))
-                end
-            end
-            # ================================================================================
-            # ======== korrektur --> um vorgegebene Anzahl an Gitterpunkten einzuhalten ======
-            # ================================================================================
-            # normierung
-            norm_gridpoints_oninterval = gridpoints_oninterval./(sum(mask_active.*gridpoints_oninterval))
-            norm_gridpoints_oninterval .*= mask_active
-            active_points = ac.adaptivegrid_numpoints - 1 - sum(inv_m(mask_active).*gridpoints_oninterval)
-            gridpoints_oninterval = Int.(round.(inv_m(mask_active).*gridpoints_oninterval + norm_gridpoints_oninterval*active_points))
-            # reduktion falls minimale Schrittweite*Stützpunkte > Intervallbreite
-            for i in 1:length(gridpoints_oninterval)
-                maxnum = floor((F⁺⁻[i+1][1]-F⁺⁻[i][1])/ac.minStepSize)
-                if gridpoints_oninterval[i] > maxnum
-                    gridpoints_oninterval[i] = maxnum
-                    mask_active[i] = 0
-                end
-            end
-            cnt += 1
-        end
-        # differenz ausgleichen
-        ∑gridpoints = sum(gridpoints_oninterval)
-        if ∑gridpoints != (ac.adaptivegrid_numpoints-1)
-            dif = (ac.adaptivegrid_numpoints-1) - ∑gridpoints
-            iₘₐₓ = 1
-            for i in 2:numIntervals
-                gridpoints_oninterval[i]>gridpoints_oninterval[iₘₐₓ] ? iₘₐₓ = i : ()
-            end
-            gridpoints_oninterval[iₘₐₓ] += dif
-        end
-        # Einträge übertragen
-        vecₒᵤₜ .= gridpoints_oninterval
-        return nothing
+    end
+#println(F_info)
+#display(pnts_perint)
+#display(n_adaptive)
+    if sum(pnts_perint) != n_adaptive
+        all(x->x==0,activeint) ? error("reduce n_adaptive! <- this is not correct anymore! check!!!") : error("algorithm needs closer look here!")
     end
 end
 
@@ -511,6 +532,7 @@ function iterator(i, mask; dir=1)
     ((i>=1) && (i<=length(mask))) ? nothing : error("tried to access vector entry at position "*string(i)*". Must lie between 1 and "*string(length(mask))*".")
     ~(mask[1] == 0) ? nothing : error("first entry of mask is not supposed to be set to false")
     ~(mask[end] == 0) ? nothing : error("last entry of mask is not supposed to be set to false")
+
     if dir == -1
         id_next = findlast(@view mask[1:(i==1 ? 1 : i-1)])
     else#if dir == 1
@@ -519,39 +541,23 @@ function iterator(i, mask; dir=1)
     return id_next!=nothing ? id_next : error("findlast/findfirst returned value of type \"nothing\".")
 end
 
-function project(P::Polynomial, n)
-    if P.distribution == "var"
-        if n < P.numpoints/2
-            pot = 1
-            for i=1:P.exponent
-                pot *= (n)
-            end
-            return (pot*P.a + P.b*n + P.c)
-        else
-            pot = 1
-            for i=1:P.exponent
-                pot *= (P.numpoints-n)
-            end
-            return P.F+P.ΔF - (pot*P.a + P.b*(P.numpoints-n))
+function project(n, P::Polynomial)
+    if (n>=0) && (n<P.n)
+        pot = 1
+        for i=1:P.exponent
+            pot *= (n)
         end
+        return (P.a*pot + P.b*n + P.c)
+    elseif (n>=P.n) && (n<P.numpoints-P.n)
+        P.d*n+P.e
+    elseif (n>=P.numpoints-P.n) && (n<= P.numpoints)
+        pot = 1
+        for i=1:P.exponent
+            pot *= (P.numpoints-n)
+        end
+        return P.F+P.ΔF - (P.a*pot+P.b*(P.numpoints-n))
     else
-        if (n>=0) && (n<P.n)
-            pot = 1
-            for i=1:P.exponent
-                pot *= (n)
-            end
-            return (P.a*pot + P.b*n + P.c)
-        elseif (n>=P.n) && (n<P.numpoints-P.n)
-            P.d*n+P.e
-        elseif (n>=P.numpoints-P.n) && (n<= P.numpoints)
-            pot = 1
-            for i=1:P.exponent
-                pot *= (P.numpoints-n)
-            end
-            return P.F+P.ΔF - (P.a*pot+P.b*(P.numpoints-n))
-        else
-            error("projecion-polynomial only defined for indices 0>=j>=$P.numpoints")
-        end
+        error("projecion-polynomial only defined for indices 0>=j>=$P.numpoints")
     end
 end
 
