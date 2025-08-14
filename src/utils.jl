@@ -33,6 +33,14 @@ struct AdaptiveConvexificationBuffer1D{T1,T2,T3} <: AbstractConvexificationBuffe
     basegrid_∂²W::Vector{T3}
 end
 
+function Base.copy(buffer::AdaptiveConvexificationBuffer1D)
+    return AdaptiveConvexificationBuffer1D(
+                        copy(buffer.basebuffer),
+                        copy(buffer.adaptivebuffer),
+                        buffer.basegrid_∂²W
+                        )
+end
+
 struct NewtonConvexificationBuffer1D{T1,T2} <: AbstractConvexificationBuffer
     first::Vector{Bool}
     isconvex::Vector{Bool}
@@ -51,6 +59,8 @@ function Base.copy(buffer::NewtonConvexificationBuffer1D)
                         buffer.updategrid,
                         [buffer.F⁻F⁺[i] for i in 1:length(buffer.F⁻F⁺)]
                         )
+end
+
 @doc raw"""
 """
 function save_buffer(buf::AdaptiveConvexificationBuffer1D,Fm,Fp,Wm,Wp,path::String;filename::String="")

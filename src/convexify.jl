@@ -129,6 +129,7 @@ function build_buffer(ac::AdaptiveGrahamScan)
     # initialize sub buffers
     basebuffer = ConvexificationBuffer1D(basegrid_F,basegrid_W)
     adaptivebuffer = ConvexificationBuffer1D(adaptivegrid_F,adaptivegrid_W)
+@show num_coarse, n_ada
     return AdaptiveConvexificationBuffer1D(basebuffer,adaptivebuffer,basegrid_∂²W)
 end
 
@@ -1702,21 +1703,6 @@ function convexify(poly_convexification::PolyConvexification, poly_buffer::PolyC
         Φpcνδ = convexify(poly_convexification, poly_buffer, Φ, ν::Vector{Float64}, xargs...; returnDerivs)
         WpcFδ = Φpcνδ
         return WpcFδ
-    end
-end
-
-@doc raw"""
-    convexify_nonediting!(F, W, mask::Vector{Bool})
-Kernel function that implements the actual convexification without editing F and W in $\mathcal{O}(N)$.
-"""
-function convexify_nonediting!(F, W, mask::Vector{Bool})
-    n=0
-    for i in 3:length(F)
-        n = iterator(i,mask;dir=-1)
-        while n >=2 && ~is_convex((F[iterator(n,mask;dir=-1)], W[iterator(n,mask;dir=-1)]),(F[n], W[n]),(F[i], W[i]))
-            mask[n]=0
-            n = iterator(i,mask;dir=-1)
-        end
     end
 end
 
