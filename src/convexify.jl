@@ -879,6 +879,7 @@ function ParametrizedR1Directions(::Val{3};l=1)
     end
     dirs = [𝐚 ⊗ 𝐛 for (𝐚, 𝐛) in rankdirs]
     unique!(dirs)
+    #dirs = [Vec{3}([1 0 0]) ⊗ Vec{3}([1 0 0])]
     return ParametrizedR1Directions(dirs)
 end
 
@@ -973,6 +974,7 @@ function convexify!(r1convexification::R1Convexification,r1buffer::R1Convexifica
     [empty!(b.partiallaminatetree) for b in r1buffer.threadbuffer]
 
     while norm(diff, Inf) > r1convexification.tol
+        @show k
         copyto!(W_rk1_old.itp.itp.coefs,W_rk1.itp.itp.coefs)
         Threads.@threads :static for lin_ind_𝐅 in 1:length(gradientgrid)
             𝐅 = gradientgrid[lin_ind_𝐅]
@@ -980,9 +982,9 @@ function convexify!(r1convexification::R1Convexification,r1buffer::R1Convexifica
             g_fw = threadbuffer[id].g_fw; g_bw = threadbuffer[id].g_bw; X_fw = threadbuffer[id].X_fw; X_bw = threadbuffer[id].X_bw
             X = threadbuffer[id].X; g = threadbuffer[id].g; h = threadbuffer[id].h; y = threadbuffer[id].y;
             buildtree && (partiallaminatetree = threadbuffer[id].partiallaminatetree)
-            for (𝐚,𝐛) in directions
-                if inbounds_𝐚(gradientgrid,𝐚) && inbounds_𝐛(gradientgrid,𝐛)
-                    𝐀 = _δ^3 * (𝐚 ⊗ 𝐛) # ^3 sollte für jede Dimension richtig sein
+            for 𝐀 in directions
+                if true #inbounds_𝐚(gradientgrid,𝐚) && inbounds_𝐛(gradientgrid,𝐛)
+                    𝐀 *= _δ^3 #* (𝐚 ⊗ 𝐛) # ^3 sollte für jede Dimension richtig sein
                     if norm(𝐀,Inf) > 0
                         ctr_fw = 0
                         ctr_bw = 0
@@ -1197,25 +1199,26 @@ function BinaryLaminationTree(convexification::HROC, buffer::HROCBuffer, W::FUN,
     return root
 end
 
-function BinaryLaminationTree(prev_bt::BinaryLaminationTree, convexification::HROC, buffer::HROCBuffer, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
+function BinaryLaminationTree(prev_bt::BinaryLaminationTree, convexification::HROC, buffer::HROCBuffer, constraint, irr, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
     level = convexification.maxlevel
     root = BinaryLaminationTree(F, 0.0, 1.0, level + 1)
-    if prev_bt.plus === nothing && prev_bt.minus === nothing
-        laminate = hrockernel(root,convexification,buffer,W,F,xargs...)
-    else
-        start_𝐀 = rankonedir(prev_bt)
-        laminate = laminatekernel(start_𝐀,convexification,buffer,W,F,xargs...)
-        if laminate === nothing # different direction yields a new laminate?
-           laminate = hrockernel(root,convexification,buffer,W,F,xargs...)
-        end
-    end
+    #if prev_bt.plus === nothing && prev_bt.minus === nothing
+    diss_offset = 0.0
+    laminate = hrockernel(prev_bt,root,convexification,buffer,constraint,diss_offset,W,F,xargs...)
+    #else
+    #    start_𝐀 = rankonedir(prev_bt)
+    #    laminate = laminatekernel(start_𝐀,convexification,buffer,constraint,W,F,xargs...)
+    #    if laminate === nothing # different direction yields a new laminate?
+    #       laminate = hrockernel(prev_bt,root,convexification,buffer,constraint,W,F,xargs...)
+    #    end
+    #end
     if laminate === nothing
         return root
     end
-    queue = [(root, laminate)]
+    queue = [(root, laminate, prev_bt)] # pivot node, lamination candidate, previous microstructure parent
 
     while !isempty(queue)
-        parent, lc = pop!(queue)
+        parent, lc, prev_parent = pop!(queue)
         ξ = norm(parent.F - lc.F⁻) / norm(lc.F⁺ - lc.F⁻)
         if isapprox(ξ,1.0,atol=1e-10) || isapprox(ξ,0.0,atol=1e-10)
             continue
@@ -1223,14 +1226,20 @@ function BinaryLaminationTree(prev_bt::BinaryLaminationTree, convexification::HR
         #dirsvd = svd(lc.F⁻ - lc.F⁺)
         #dirrank = count(x -> x > 1e-8, dirsvd.S)
         #if dirrank == 1
+            #parent.minus = BinaryLaminationTree(prev_parent.minus === nothing ? lc.F⁻ : irr(prev_parent.minus.F,lc.F⁻,xargs...) ? lc.F⁻ : prev_parent.minus.F, lc.W⁻, (1.0 - ξ), level, parent)
+            #parent.plus = BinaryLaminationTree(prev_parent.plus === nothing ? lc.F⁺ : irr(prev_parent.plus.F,lc.F⁺,xargs...) ? lc.F⁺ : prev_parent.plus.F, lc.W⁺, ξ, level, parent)
             parent.minus = BinaryLaminationTree(lc.F⁻, lc.W⁻, (1.0 - ξ), level, parent)
             parent.plus = BinaryLaminationTree(lc.F⁺, lc.W⁺, ξ, level, parent)
+            #diss_offset = irr(prev_bt,root,xargs...)
+            #prev_direction = rankonedir(parent)
             level = parent.level - 1
             if level > 0
-                laminate⁺ = hrockernel(root,convexification,buffer,W,lc.F⁺,xargs...)
-                laminate⁻ = hrockernel(root,convexification,buffer,W,lc.F⁻,xargs...)
-                !(laminate⁺ === nothing) && push!(queue,(parent.plus, laminate⁺))
-                !(laminate⁻ === nothing) && push!(queue,(parent.minus,laminate⁻))
+                prev⁺ = prev_parent.plus === nothing ? prev_parent : prev_parent.plus
+                prev⁻ = prev_parent.minus === nothing ? prev_parent : prev_parent.minus
+                laminate⁺ = hrockernel(prev_bt,root,convexification,buffer,constraint,diss_offset,W,lc.F⁺,xargs...)
+                laminate⁻ = hrockernel(prev_bt,root,convexification,buffer,constraint,diss_offset,W,lc.F⁻,xargs...)
+                !(laminate⁺ === nothing) && push!(queue,(parent.plus, laminate⁺, prev⁺))
+                !(laminate⁻ === nothing) && push!(queue,(parent.minus,laminate⁻, prev⁻))
             end
         #else
         #    decompositionstack = [(parent,1,1)]
@@ -1282,8 +1291,8 @@ end
     convexify(prev_bt::BinaryLaminationTree,hroc::HROC, buffer::HROCBuffer, W::FUN, F::T1, xargs::Vararg{Any,XN}) -> bt::BinaryLaminationTree
 Performs a hierarchical rank one convexification (HROC) based and enforces laminate continuity by preferring the previous laminate direction.
 """
-function convexify(prev_bt::BinaryLaminationTree,hroc::HROC, buffer::HROCBuffer, W::FUN, F::T1, xargs::Vararg{Any,XN}) where {T1,FUN,XN}
-    return BinaryLaminationTree(prev_bt,hroc,buffer,W,F,xargs...)
+function convexify(prev_bt::BinaryLaminationTree, hroc::HROC, buffer::HROCBuffer, constraint, irr, W::FUN, F::T1, xargs::Vararg{Any,XN}) where {T1,FUN,XN}
+    return BinaryLaminationTree(prev_bt,hroc,buffer,constraint,irr,W,F,xargs...)
 end
 
 function stretchfilter(F)
@@ -1296,11 +1305,20 @@ function stretchfilter(F)
     end
 end
 
-function hrockernel(root::BinaryLaminationTree, convexification::HROC, buffer::HROCBuffer, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
+function same_as_previous(A,prev)
+    U_p, S_p, Vt_p = svd(prev)
+    U, S, Vt = svd(A)
+    return all(isapprox.(U_p[:,1] * sqrt(S_p[1]),U[:,1]*sqrt(S[1])))
+end
+
+function hrockernel(prev::BinaryLaminationTree, root::BinaryLaminationTree, convexification::HROC, buffer::HROCBuffer, constraint, diss_offset, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
     W_ref = W(F,xargs...)
     𝔸_ref, _, W_glob_ref = eval(root,W,xargs...)
     laminate = nothing
     for 𝐀 in convexification.dirs
+        #if same_as_previous(𝐀,prev_direction)
+        #    continue
+        #end
         fill!(buffer) # fill buffers with zeros
         #𝐀::Tensor{2,dim,T,N} = (𝐚 ⊗ 𝐛)
         _δ = minimum(δ(convexification, 𝐀))
@@ -1318,7 +1336,7 @@ function hrockernel(root::BinaryLaminationTree, convexification::HROC, buffer::H
                     𝐱 = F # init dir
                     ell = 0 # start at 0
                 end
-                while inbounds(𝐱,convexification) && (convexification.GLcheck ? det(𝐱) > 1e-6 : true)
+                while inbounds(𝐱,convexification) && (convexification.GLcheck ? det(𝐱) > 1e-6 : true) && constraint(prev,𝐱,xargs...)
                     val = W(𝐱,xargs...)
                     if dir == 1
                         buffer.forward_initial.values[ctr_fw+1] = val
