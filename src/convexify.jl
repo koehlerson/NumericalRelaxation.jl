@@ -1199,7 +1199,7 @@ function BinaryLaminationTree(convexification::HROC, buffer::HROCBuffer, W::FUN,
     return root
 end
 
-function BinaryLaminationTree(prev_bt::BinaryLaminationTree, convexification::HROC, buffer::HROCBuffer, constraint, irr, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
+function BinaryLaminationTree(prev_bt::BinaryLaminationTree, convexification::HROC, buffer::HROCBuffer, constraint::CON1, irr::CON2, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,CON1,CON2,XN}
     level = convexification.maxlevel
     root = BinaryLaminationTree(F, 0.0, 1.0, level + 1)
     #if prev_bt.plus === nothing && prev_bt.minus === nothing
@@ -1238,8 +1238,8 @@ function BinaryLaminationTree(prev_bt::BinaryLaminationTree, convexification::HR
                 prev⁻ = prev_parent.minus === nothing ? prev_parent : prev_parent.minus
                 laminate⁺ = hrockernel(prev_bt,root,convexification,buffer,constraint,diss_offset,W,lc.F⁺,xargs...)
                 laminate⁻ = hrockernel(prev_bt,root,convexification,buffer,constraint,diss_offset,W,lc.F⁻,xargs...)
-                !(laminate⁺ === nothing) && push!(queue,(parent.plus, laminate⁺, prev⁺))
-                !(laminate⁻ === nothing) && push!(queue,(parent.minus,laminate⁻, prev⁻))
+                !irr(constraint,prev_parent,lc.F⁺,xargs...) && !(laminate⁺ === nothing) && push!(queue,(parent.plus, laminate⁺, prev⁺))
+                !irr(constraint,prev_parent,lc.F⁻,xargs...) && !(laminate⁻ === nothing) && push!(queue,(parent.minus,laminate⁻, prev⁻))
             end
         #else
         #    decompositionstack = [(parent,1,1)]
