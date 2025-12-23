@@ -905,6 +905,19 @@ function ParametrizedDDirections(::Val{2};l=1)
     return ParametrizedDDirections(rankdirs)
 end
 
+function ParametrizedDDirections(::Val{3};l=1)
+    rankdirs = Vector{Tensor{2,3,Float64,9}}()
+    for i in -l:l, j in -l:l, m in -l:l, n in -l:l, k in -l:l, o in -l:l, p in -l:l, q in -l:l, r in -l:l
+        if (i==j==m==n==k==o==p==q==r==0)
+            continue
+        else
+            push!(rankdirs,Tensor{2,3}((i,j,m,n,k,o,p,q,r)))
+        end
+    end
+    unique!(rankdirs)
+    return ParametrizedDDirections(rankdirs)
+end
+
 ParametrizedDDirections(dimp::Int;l=1) = ParametrizedDDirections(Val(dimp);l=l)
 ParametrizedDDirections(gradientgrid::GradientGrid{dimc}) where dimc = ParametrizedDDirections(isqrt(dimc))
 Base.iterate(d::ParametrizedDDirections, state=1) = Base.iterate(d.dirs, state)
