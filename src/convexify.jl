@@ -1217,7 +1217,7 @@ function BinaryLaminationTree(prev_bt::BinaryLaminationTree, convexification::HR
     root = BinaryLaminationTree(F, 0.0, 1.0, level + 1)
     #if prev_bt.plus === nothing && prev_bt.minus === nothing
     diss_offset = 0.0
-    laminate = hrockernel(prev_bt,root,convexification,buffer,constraint,diss_offset,W,F,xargs...)
+    laminate = hrockernel(zero(typeof(F)),prev_bt,root,convexification,buffer,constraint,diss_offset,W,F,xargs...)
     #else
     #    start_𝐀 = rankonedir(prev_bt)
     #    laminate = laminatekernel(start_𝐀,convexification,buffer,constraint,W,F,xargs...)
@@ -1244,13 +1244,13 @@ function BinaryLaminationTree(prev_bt::BinaryLaminationTree, convexification::HR
             parent.minus = BinaryLaminationTree(lc.F⁻, lc.W⁻, (1.0 - ξ), level, parent)
             parent.plus = BinaryLaminationTree(lc.F⁺, lc.W⁺, ξ, level, parent)
             #diss_offset = irr(prev_bt,root,xargs...)
-            #prev_direction = rankonedir(parent)
+            prev_direction = rankonedir(parent)
             level = parent.level - 1
             if level > 0
                 prev⁺ = prev_parent.plus === nothing ? prev_parent : prev_parent.plus
                 prev⁻ = prev_parent.minus === nothing ? prev_parent : prev_parent.minus
-                laminate⁺ = hrockernel(prev_bt,root,convexification,buffer,constraint,diss_offset,W,lc.F⁺,xargs...)
-                laminate⁻ = hrockernel(prev_bt,root,convexification,buffer,constraint,diss_offset,W,lc.F⁻,xargs...)
+                laminate⁺ = hrockernel(prev_direction,prev_bt,root,convexification,buffer,constraint,diss_offset,W,lc.F⁺,xargs...)
+                laminate⁻ = hrockernel(prev_direction,prev_bt,root,convexification,buffer,constraint,diss_offset,W,lc.F⁻,xargs...)
                 !irr(constraint,prev_parent,lc.F⁺,xargs...) && !(laminate⁺ === nothing) && push!(queue,(parent.plus, laminate⁺, prev⁺))
                 !irr(constraint,prev_parent,lc.F⁻,xargs...) && !(laminate⁻ === nothing) && push!(queue,(parent.minus,laminate⁻, prev⁻))
             end
@@ -1324,14 +1324,14 @@ function same_as_previous(A,prev)
     return all(isapprox.(U_p[:,1] * sqrt(S_p[1]),U[:,1]*sqrt(S[1])))
 end
 
-function hrockernel(prev::BinaryLaminationTree, root::BinaryLaminationTree, convexification::HROC, buffer::HROCBuffer, constraint, diss_offset, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
+function hrockernel(prev_direction,prev::BinaryLaminationTree, root::BinaryLaminationTree, convexification::HROC, buffer::HROCBuffer, constraint, diss_offset, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
     W_ref = W(F,xargs...)
     𝔸_ref, _, W_glob_ref = eval(root,W,xargs...)
     laminate = nothing
     for 𝐀 in convexification.dirs
-        #if same_as_previous(𝐀,prev_direction)
-        #    continue
-        #end
+        if same_as_previous(𝐀,prev_direction)
+            continue
+        end
         fill!(buffer) # fill buffers with zeros
         #𝐀::Tensor{2,dim,T,N} = (𝐚 ⊗ 𝐛)
         _δ = minimum(δ(convexification, 𝐀))
