@@ -1212,12 +1212,12 @@ function BinaryLaminationTree(convexification::HROC, buffer::HROCBuffer, W::FUN,
     return root
 end
 
-function BinaryLaminationTree(prev_bt::BinaryLaminationTree, convexification::HROC, buffer::HROCBuffer, constraint::CON1, irr::CON2, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,CON1,CON2,XN}
+function BinaryLaminationTree(prev_F,prev_bt::BinaryLaminationTree, convexification::HROC, buffer::HROCBuffer, constraint::CON1, irr::CON2, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,CON1,CON2,XN}
     level = convexification.maxlevel
     root = BinaryLaminationTree(F, 0.0, 1.0, level + 1)
     #if prev_bt.plus === nothing && prev_bt.minus === nothing
     diss_offset = 0.0
-    laminate = hrockernel(zero(typeof(F)),prev_bt,root,convexification,buffer,constraint,diss_offset,W,F,xargs...)
+    laminate = hrockernel(zero(typeof(F)),prev_F,prev_bt,root,convexification,buffer,constraint,diss_offset,W,F,xargs...)
     #else
     #    start_𝐀 = rankonedir(prev_bt)
     #    laminate = laminatekernel(start_𝐀,convexification,buffer,constraint,W,F,xargs...)
@@ -1249,8 +1249,8 @@ function BinaryLaminationTree(prev_bt::BinaryLaminationTree, convexification::HR
             if level > 0
                 prev⁺ = prev_parent.plus === nothing ? prev_parent : prev_parent.plus
                 prev⁻ = prev_parent.minus === nothing ? prev_parent : prev_parent.minus
-                laminate⁺ = hrockernel(prev_direction,prev_bt,root,convexification,buffer,constraint,diss_offset,W,lc.F⁺,xargs...)
-                laminate⁻ = hrockernel(prev_direction,prev_bt,root,convexification,buffer,constraint,diss_offset,W,lc.F⁻,xargs...)
+                laminate⁺ = hrockernel(prev_direction,prev_F,prev_bt,root,convexification,buffer,constraint,diss_offset,W,lc.F⁺,xargs...)
+                laminate⁻ = hrockernel(prev_direction,prev_F,prev_bt,root,convexification,buffer,constraint,diss_offset,W,lc.F⁻,xargs...)
                 !irr(constraint,prev_parent,lc.F⁺,xargs...) && !(laminate⁺ === nothing) && push!(queue,(parent.plus, laminate⁺, prev⁺))
                 !irr(constraint,prev_parent,lc.F⁻,xargs...) && !(laminate⁻ === nothing) && push!(queue,(parent.minus,laminate⁻, prev⁻))
             end
@@ -1304,8 +1304,8 @@ end
     convexify(prev_bt::BinaryLaminationTree,hroc::HROC, buffer::HROCBuffer, W::FUN, F::T1, xargs::Vararg{Any,XN}) -> bt::BinaryLaminationTree
 Performs a hierarchical rank one convexification (HROC) based and enforces laminate continuity by preferring the previous laminate direction.
 """
-function convexify(prev_bt::BinaryLaminationTree, hroc::HROC, buffer::HROCBuffer, constraint, irr, W::FUN, F::T1, xargs::Vararg{Any,XN}) where {T1,FUN,XN}
-    return BinaryLaminationTree(prev_bt,hroc,buffer,constraint,irr,W,F,xargs...)
+function convexify(prev_F,prev_bt::BinaryLaminationTree, hroc::HROC, buffer::HROCBuffer, constraint, irr, W::FUN, F::T1, xargs::Vararg{Any,XN}) where {T1,FUN,XN}
+    return BinaryLaminationTree(prev_F,prev_bt,hroc,buffer,constraint,irr,W,F,xargs...)
 end
 
 function stretchfilter(F)
@@ -1324,7 +1324,7 @@ function same_as_previous(A,prev)
     return all(isapprox.(U_p[:,1] * sqrt(S_p[1]),U[:,1]*sqrt(S[1])))
 end
 
-function hrockernel(prev_direction,prev::BinaryLaminationTree, root::BinaryLaminationTree, convexification::HROC, buffer::HROCBuffer, constraint, diss_offset, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
+function hrockernel(prev_direction,prev_F,prev::BinaryLaminationTree, root::BinaryLaminationTree, convexification::HROC, buffer::HROCBuffer, constraint, diss_offset, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
     W_ref = W(F,xargs...)
     𝔸_ref, _, W_glob_ref = eval(root,W,xargs...)
     laminate = nothing
@@ -1349,7 +1349,7 @@ function hrockernel(prev_direction,prev::BinaryLaminationTree, root::BinaryLamin
                     𝐱 = F # init dir
                     ell = 0 # start at 0
                 end
-                while inbounds(𝐱,convexification) && (convexification.GLcheck ? det(𝐱) > 1e-6 : true) && constraint(prev,𝐱,xargs...)
+                while inbounds(𝐱,convexification) && (convexification.GLcheck ? det(𝐱) > 1e-6 : true) && constraint(prev_F,prev,𝐱,xargs...)
                     val = W(𝐱,xargs...)
                     if dir == 1
                         buffer.forward_initial.values[ctr_fw+1] = val
