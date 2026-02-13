@@ -1161,125 +1161,130 @@ function isorthogonal(laminate::Laminate, 𝐀::Tensor{2,2})
 end
 isorthogonal(laminate::Nothing, 𝐀::Tensor{2}) = false
 
-mutable struct BinaryLaminationTree{dim,T,N}
+struct BinaryLaminationTreeNode{dim,T,N}
     F::Union{T,Tensor{2,dim,T,N}}
     W::T
     ξ::T
     level::Int
-    parent::Union{BinaryLaminationTree{dim,T,N},Nothing}
-    minus::Union{BinaryLaminationTree{dim,T,N},Nothing}
-    plus::Union{BinaryLaminationTree{dim,T,N},Nothing}
 
-    function BinaryLaminationTree(F::Tensor{order,dimp,T,N},W::T,ξ::T,l::Int,parent,minus,plus) where {order,dimp,T,N}
-        return new{dimp,T,N}(F,W,ξ,l,parent,minus,plus)
+    function BinaryLaminationTreeNode(F::Tensor{order,dimp,T,N},W::T,ξ::T,l::Int) where {order,dimp,T,N}
+        return new{dimp,T,N}(F,W,ξ,l)
     end
 
-    function BinaryLaminationTree(F::T,W::T,ξ::T,l::Int,parent,minus,plus) where {T<:Number}
-        return new{1,T,1}(F,W,ξ,l,parent,minus,plus)
+    function BinaryLaminationTreeNode(F::T,W::T,ξ::T,l::Int) where {T<:Number}
+        return new{1,T,1}(F,W,ξ,l)
     end
-
 end
 
-BinaryLaminationTree(F,W,ξ,l) = BinaryLaminationTree(F,W,ξ,l,nothing,nothing,nothing)
-BinaryLaminationTree(F,W,ξ,l,parent) = BinaryLaminationTree(F,W,ξ,l,parent,nothing,nothing)
-BinaryLaminationTree(cs::HROC{dimp}) where dimp = BinaryLaminationTree(one(Tensor{2,dimp}),0.0,0.0,cs.maxlevel,nothing,nothing,nothing)
+struct BinaryLaminationTree{dim,T,N}
+    nodes::Vector{BinaryLaminationTreeNode{dim,T,N}}
+    active::BitVector
+end
+
+# Index convention for implicit binary tree
+minus_idx(i::Int) = 2i
+plus_idx(i::Int) = 2i + 1
+parent_idx(i::Int) = i ÷ 2
+
+function haschildren(bt::BinaryLaminationTree, i::Int)
+    mi = minus_idx(i)
+    return mi ≤ length(bt.active) && bt.active[mi]
+end
+isleaf(bt::BinaryLaminationTree, i::Int) = !haschildren(bt, i)
+
+function _make_tree(::Type{Tensor{2,dim,T,N}}, maxlevel) where {dim,T,N}
+    maxnodes = (1 << (maxlevel + 2)) - 1
+    nodes = Vector{BinaryLaminationTreeNode{dim,T,N}}(undef, maxnodes)
+    active = falses(maxnodes)
+    return BinaryLaminationTree{dim,T,N}(nodes, active)
+end
+
+function _setnode!(bt::BinaryLaminationTree, i::Int, node::BinaryLaminationTreeNode)
+    if i > length(bt.nodes)
+        oldlen = length(bt.nodes)
+        newlen = max(2 * oldlen, i)
+        resize!(bt.nodes, newlen)
+        resize!(bt.active, newlen)
+        bt.active[(oldlen+1):newlen] .= false
+    end
+    bt.nodes[i] = node
+    bt.active[i] = true
+end
+
+function BinaryLaminationTree(F::Tensor{2,dim,T,N},W::T,ξ::T,l::Int) where {dim,T,N}
+    bt = _make_tree(Tensor{2,dim,T,N}, l)
+    _setnode!(bt, 1, BinaryLaminationTreeNode(F, W, ξ, l))
+    return bt
+end
+
+BinaryLaminationTree(cs::HROC{dimp}) where dimp = BinaryLaminationTree(one(Tensor{2,dimp}),0.0,0.0,cs.maxlevel)
 
 function BinaryLaminationTree(convexification::HROC, buffer::HROCBuffer, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
     level = convexification.maxlevel
-    root = BinaryLaminationTree(F, 0.0, 1.0, level + 1)
-    laminate = hrockernel(root,convexification,buffer,W,F,xargs...)
+    bt = _make_tree(Tensor{2,dim,T,N}, level)
+    _setnode!(bt, 1, BinaryLaminationTreeNode(F, zero(T), one(T), level + 1))
+    laminate = hrockernel(bt,convexification,buffer,W,F,xargs...)
     if laminate === nothing
-        return root
+        return bt
     end
-    queue = [(root, laminate)]
+    queue = [(1, laminate)] # (parent_idx, laminate_candidate)
 
     while !isempty(queue)
-        parent, lc = pop!(queue)
-        ξ = norm(parent.F - lc.F⁻) / norm(lc.F⁺ - lc.F⁻)
+        pidx, lc = pop!(queue)
+        parent_F = bt.nodes[pidx].F
+        ξ = norm(parent_F - lc.F⁻) / norm(lc.F⁺ - lc.F⁻)
         if isapprox(ξ,1.0,atol=1e-10) || isapprox(ξ,0.0,atol=1e-10)
             continue
         end
-        parent.minus = BinaryLaminationTree(lc.F⁻, lc.W⁻, (1.0 - ξ), level, parent)
-        parent.plus = BinaryLaminationTree(lc.F⁺, lc.W⁺, ξ, level, parent)
-        level = parent.level - 1
+        _setnode!(bt, minus_idx(pidx), BinaryLaminationTreeNode(lc.F⁻, lc.W⁻, (1.0 - ξ), level))
+        _setnode!(bt, plus_idx(pidx), BinaryLaminationTreeNode(lc.F⁺, lc.W⁺, ξ, level))
+        level = bt.nodes[pidx].level - 1
         if level > 0
-            laminate⁺ = hrockernel(root,convexification,buffer,W,lc.F⁺,xargs...)
-            laminate⁻ = hrockernel(root,convexification,buffer,W,lc.F⁻,xargs...)
-            !(laminate⁺ === nothing) && push!(queue,(parent.plus, laminate⁺))
-            !(laminate⁻ === nothing) && push!(queue,(parent.minus,laminate⁻))
+            laminate⁺ = hrockernel(bt,convexification,buffer,W,lc.F⁺,xargs...)
+            laminate⁻ = hrockernel(bt,convexification,buffer,W,lc.F⁻,xargs...)
+            !(laminate⁺ === nothing) && push!(queue,(plus_idx(pidx), laminate⁺))
+            !(laminate⁻ === nothing) && push!(queue,(minus_idx(pidx), laminate⁻))
         end
     end
-    return root
+    return bt
 end
 
 function BinaryLaminationTree(prev_F,prev_bt::BinaryLaminationTree, convexification::HROC, buffer::HROCBuffer, constraint::CON1, irr::CON2, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,CON1,CON2,XN}
     level = convexification.maxlevel
-    root = BinaryLaminationTree(F, 0.0, 1.0, level + 1)
-    #if prev_bt.plus === nothing && prev_bt.minus === nothing
+    bt = _make_tree(Tensor{2,dim,T,N}, level)
+    _setnode!(bt, 1, BinaryLaminationTreeNode(F, zero(T), one(T), level + 1))
     diss_offset = 0.0
-    laminate = hrockernel(zero(typeof(F)),prev_F,prev_bt,root,convexification,buffer,constraint,diss_offset,W,F,xargs...)
-    #else
-    #    start_𝐀 = rankonedir(prev_bt)
-    #    laminate = laminatekernel(start_𝐀,convexification,buffer,constraint,W,F,xargs...)
-    #    if laminate === nothing # different direction yields a new laminate?
-    #       laminate = hrockernel(prev_bt,root,convexification,buffer,constraint,W,F,xargs...)
-    #    end
-    #end
+    laminate = hrockernel(zero(typeof(F)),prev_F,prev_bt,bt,convexification,buffer,constraint,diss_offset,W,F,xargs...)
     if laminate === nothing
-        return root
+        return bt
     end
-    queue = [(root, laminate, prev_bt)] # pivot node, lamination candidate, previous microstructure parent
+    queue = [(1, laminate, 1)] # (parent_idx, laminate_candidate, prev_parent_idx)
 
     while !isempty(queue)
-        parent, lc, prev_parent = pop!(queue)
-        ξ = norm(parent.F - lc.F⁻) / norm(lc.F⁺ - lc.F⁻)
+        pidx, lc, prev_pidx = pop!(queue)
+        parent_F = bt.nodes[pidx].F
+        ξ = norm(parent_F - lc.F⁻) / norm(lc.F⁺ - lc.F⁻)
         if isapprox(ξ,1.0,atol=1e-10) || isapprox(ξ,0.0,atol=1e-10)
             continue
         end
-        #dirsvd = svd(lc.F⁻ - lc.F⁺)
-        #dirrank = count(x -> x > 1e-8, dirsvd.S)
-        #if dirrank == 1
-            #parent.minus = BinaryLaminationTree(prev_parent.minus === nothing ? lc.F⁻ : irr(prev_parent.minus.F,lc.F⁻,xargs...) ? lc.F⁻ : prev_parent.minus.F, lc.W⁻, (1.0 - ξ), level, parent)
-            #parent.plus = BinaryLaminationTree(prev_parent.plus === nothing ? lc.F⁺ : irr(prev_parent.plus.F,lc.F⁺,xargs...) ? lc.F⁺ : prev_parent.plus.F, lc.W⁺, ξ, level, parent)
-            parent.minus = BinaryLaminationTree(lc.F⁻, lc.W⁻, (1.0 - ξ), level, parent)
-            parent.plus = BinaryLaminationTree(lc.F⁺, lc.W⁺, ξ, level, parent)
-            #diss_offset = irr(prev_bt,root,xargs...)
-            prev_direction = rankonedir(parent)
-            level = parent.level - 1
-            if level > 0
-                prev⁺ = prev_parent.plus === nothing ? prev_parent : prev_parent.plus
-                prev⁻ = prev_parent.minus === nothing ? prev_parent : prev_parent.minus
-                laminate⁺ = hrockernel(prev_direction,prev_F,prev_bt,root,convexification,buffer,constraint,diss_offset,W,lc.F⁺,xargs...)
-                laminate⁻ = hrockernel(prev_direction,prev_F,prev_bt,root,convexification,buffer,constraint,diss_offset,W,lc.F⁻,xargs...)
-                !irr(constraint,prev_parent,lc.F⁺,xargs...) && !(laminate⁺ === nothing) && push!(queue,(parent.plus, laminate⁺, prev⁺))
-                !irr(constraint,prev_parent,lc.F⁻,xargs...) && !(laminate⁻ === nothing) && push!(queue,(parent.minus,laminate⁻, prev⁻))
-            end
-        #else
-        #    decompositionstack = [(parent,1,1)]
-        #    n = 1
-        #    while !isempty(decompositionstack)
-        #        pivotnode, pivot_i, depth = pop!(decompositionstack)
-        #        pivot_i = pivot_i > dirrank ? pivot_i % dirrank : pivot_i
-        #        (depth > n+1) && continue
-        #        ui = Vec{dim}(abs.(@view(dirsvd.U[:,pivot_i])))
-        #        vi = Vec{dim}(abs.(@view(dirsvd.Vt[:,pivot_i])))
-        #        si = dirsvd.S[pivot_i]
-        #        A = ui ⊗ vi
-        #        F⁻ = pivotnode.F - ((root.F - lc.F⁻) ⋅ A)/(depth)
-        #        F⁺ = pivotnode.F - ((root.F - lc.F⁺) ⋅ A)/(depth)
-        #        ξ = norm(pivotnode.F - F⁻) / norm(F⁺ - F⁻)
-        #        pivotnode.minus = BinaryLaminationTree(F⁻, W(F⁻,xargs...), (1.0 - ξ), level, pivotnode)
-        #        pivotnode.plus = BinaryLaminationTree(F⁺, W(F⁺,xargs...), ξ, level, pivotnode)
-        #        push!(decompositionstack,(pivotnode.plus, pivot_i+1,depth+1))
-        #        push!(decompositionstack,(pivotnode.minus,pivot_i+1,depth+1))
-        #    end
-        #end
+        _setnode!(bt, minus_idx(pidx), BinaryLaminationTreeNode(lc.F⁻, lc.W⁻, (1.0 - ξ), level))
+        _setnode!(bt, plus_idx(pidx), BinaryLaminationTreeNode(lc.F⁺, lc.W⁺, ξ, level))
+        prev_direction = rankonedir(bt, pidx)
+        level = bt.nodes[pidx].level - 1
+        if level > 0
+            prev_plus_idx = haschildren(prev_bt, prev_pidx) ? plus_idx(prev_pidx) : prev_pidx
+            prev_minus_idx = haschildren(prev_bt, prev_pidx) ? minus_idx(prev_pidx) : prev_pidx
+            laminate⁺ = hrockernel(prev_direction,prev_F,prev_bt,bt,convexification,buffer,constraint,diss_offset,W,lc.F⁺,xargs...)
+            laminate⁻ = hrockernel(prev_direction,prev_F,prev_bt,bt,convexification,buffer,constraint,diss_offset,W,lc.F⁻,xargs...)
+            !irr(constraint,NodeView(prev_bt,prev_pidx),lc.F⁺,xargs...) && !(laminate⁺ === nothing) && push!(queue,(plus_idx(pidx), laminate⁺, prev_plus_idx))
+            !irr(constraint,NodeView(prev_bt,prev_pidx),lc.F⁻,xargs...) && !(laminate⁻ === nothing) && push!(queue,(minus_idx(pidx), laminate⁻, prev_minus_idx))
+        end
     end
-    return root
+    return bt
 end
 
-function rankonedir(node::BinaryLaminationTree{dim}) where dim
-    start_𝐀 = node.plus.F - node.minus.F
+function rankonedir(bt::BinaryLaminationTree{dim}, idx::Int) where dim
+    start_𝐀 = bt.nodes[plus_idx(idx)].F - bt.nodes[minus_idx(idx)].F
     start_𝐀 /= minimum(x->isapprox(abs(x),0,atol=1e-10) ? Inf : x, start_𝐀) #normalize direction and filter out zeros
     start_𝐀 = Tensor{2,dim}((i,j)->round(start_𝐀[i,j]))
 end
@@ -1290,7 +1295,7 @@ function rankonedir(laminate::Laminate{dim}) where dim
     start_𝐀 = Tensor{2,dim}((i,j)->round(start_𝐀[i,j]))
 end
 
-@doc raw"""    
+@doc raw"""
     convexify(hroc::HROC, buffer::HROCBuffer, W::FUN, F::T1, xargs::Vararg{Any,XN}) -> bt::BinaryLaminationTree
 Performs a hierarchical rank one convexification (HROC) based on the H-sequence characterization of the convex envelope.
 Note that the output of the algorithm is only an upper bound. For a class of problems the provided hull matches the rank-one convex envelope.
@@ -1300,7 +1305,7 @@ function convexify(hroc::HROC, buffer::HROCBuffer, W::FUN, F::T1, xargs::Vararg{
     return BinaryLaminationTree(hroc,buffer,W,F,xargs...)
 end
 
-@doc raw"""    
+@doc raw"""
     convexify(prev_bt::BinaryLaminationTree,hroc::HROC, buffer::HROCBuffer, W::FUN, F::T1, xargs::Vararg{Any,XN}) -> bt::BinaryLaminationTree
 Performs a hierarchical rank one convexification (HROC) based and enforces laminate continuity by preferring the previous laminate direction.
 """
@@ -1324,6 +1329,63 @@ function same_as_previous(A,prev)
     return all(isapprox.(U_p[:,1] * sqrt(S_p[1]),U[:,1]*sqrt(S[1])))
 end
 
+function hrockernel(root::BinaryLaminationTree, convexification::HROC, buffer::HROCBuffer, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
+    W_ref = W(F,xargs...)
+    𝔸_ref, _, W_glob_ref = eval(root,W,xargs...)
+    laminate = nothing
+    for 𝐀 in convexification.dirs
+        fill!(buffer) # fill buffers with zeros
+        _δ = minimum(δ(convexification, 𝐀))
+        𝐀 *= _δ
+        if norm(𝐀,Inf) > 0
+            ctr_fw = 0
+            ctr_bw = 0
+            for dir in (-1, 1)
+                if dir==-1
+                    𝐱 = F - 𝐀 # init dir
+                    ell = -1 # start at -1, so - 𝐀
+                else
+                    𝐱 = F # init dir
+                    ell = 0 # start at 0
+                end
+                while inbounds(𝐱,convexification) && (convexification.GLcheck ? det(𝐱) > 1e-6 : true)
+                    val = W(𝐱,xargs...)
+                    if dir == 1
+                        buffer.forward_initial.values[ctr_fw+1] = val
+                        buffer.forward_initial.grid[ctr_fw+1] = ell
+                        ctr_fw += 1
+                    else
+                        buffer.backward_initial.values[ctr_bw+1] = val
+                        buffer.backward_initial.grid[ctr_bw+1] = ell
+                        ctr_bw += 1
+                    end
+                    𝐱 += dir*𝐀
+                    ell += dir
+                end
+            end
+            if ((ctr_fw > 0) && (ctr_bw > 0))
+                concat!(buffer,ctr_fw+1,ctr_bw)
+                Wᶜ, j = convexify!(buffer,ctr_bw+ctr_fw)
+                l₁ = buffer.convex.grid[j-1]
+                l₂ = buffer.convex.grid[j]
+                F⁻ = F + l₁*𝐀
+                F⁺ = F + l₂*𝐀
+                W⁻ = W(F⁻,xargs...)
+                W⁺ = W(F⁺,xargs...)
+                lc = Laminate(F⁻,F⁺,W⁻,W⁺,𝐀,0)
+                𝔸, _, W_glob_trial = eval(root,F,lc,W,xargs...)
+                if (Wᶜ <= W_ref)
+                    W_ref = Wᶜ
+                    𝔸_ref = 𝔸
+                    W_glob_ref = W_glob_trial
+                    laminate = lc
+                end
+            end
+        end
+    end
+    return laminate
+end
+
 function hrockernel(prev_direction,prev_F,prev::BinaryLaminationTree, root::BinaryLaminationTree, convexification::HROC, buffer::HROCBuffer, constraint, diss_offset, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
     W_ref = W(F,xargs...)
     𝔸_ref, _, W_glob_ref = eval(root,W,xargs...)
@@ -1333,7 +1395,6 @@ function hrockernel(prev_direction,prev_F,prev::BinaryLaminationTree, root::Bina
             continue
         end
         fill!(buffer) # fill buffers with zeros
-        #𝐀::Tensor{2,dim,T,N} = (𝐚 ⊗ 𝐛)
         _δ = minimum(δ(convexification, 𝐀))
         𝐀 *= _δ
         if norm(𝐀,Inf) > 0
@@ -1341,11 +1402,9 @@ function hrockernel(prev_direction,prev_F,prev::BinaryLaminationTree, root::Bina
             ctr_bw = 0
             for dir in (-1, 1)
                 if dir==-1
-                    #𝐱_prefilter = F - 𝐀 # init dir
                     𝐱 = F - 𝐀 # init dir
                     ell = -1 # start at -1, so - 𝐀
                 else
-                    #𝐱_prefilter = F # init dir
                     𝐱 = F # init dir
                     ell = 0 # start at 0
                 end
@@ -1375,7 +1434,7 @@ function hrockernel(prev_direction,prev_F,prev::BinaryLaminationTree, root::Bina
                 W⁺ = W(F⁺,xargs...)
                 lc = Laminate(F⁻,F⁺,W⁻,W⁺,𝐀,0)
                 𝔸, _, W_glob_trial = eval(root,F,lc,W,xargs...)
-                if (Wᶜ <= W_ref) #|| (W_glob_trial <= W_glob_ref) #|| (𝐀 ⊡ 𝔸_ref ⊡ 𝐀 < 𝐀 ⊡ 𝔸 ⊡ 𝐀)
+                if (Wᶜ <= W_ref)
                     W_ref = Wᶜ
                     𝔸_ref = 𝔸
                     W_glob_ref = W_glob_trial
@@ -1421,7 +1480,7 @@ function laminatekernel(𝐀::Tensor{2,dim,T,N},convexification::HROC, buffer::H
     if ((ctr_fw > 0) && (ctr_bw > 0))
         concat!(buffer,ctr_fw+1,ctr_bw)
         Wᶜ, j = convexify!(buffer,ctr_bw+ctr_fw)
-        if (Wᶜ < W_ref) #|| isapprox(Wᶜ,W_ref,atol=1e-8) # && !isorthogonal(laminate,𝐀)
+        if (Wᶜ < W_ref)
             W_ref = Wᶜ
             l₁ = buffer.convex.grid[j-1]
             l₂ = buffer.convex.grid[j]
@@ -1435,59 +1494,65 @@ function laminatekernel(𝐀::Tensor{2,dim,T,N},convexification::HROC, buffer::H
     return laminate
 end
 
-function NumericalRelaxation.eval(node::BinaryLaminationTree{dim}, W_nonconvex::FUN, xargs::Vararg{Any,XN}) where {dim,FUN,XN}
+function NumericalRelaxation.eval(bt::BinaryLaminationTree{dim}, idx::Int, W_nonconvex::FUN, xargs::Vararg{Any,XN}) where {dim,FUN,XN}
     W = 0.0
     𝐏 = zero(Tensor{2,dim})
     𝔸 = zero(Tensor{4,dim})
-    if node.minus === nothing && node.plus === nothing
-        𝔸_temp, 𝐏_temp, W_temp = Tensors.hessian(y -> W_nonconvex(y, xargs...), node.F, :all)
+    if isleaf(bt, idx)
+        𝔸_temp, 𝐏_temp, W_temp = Tensors.hessian(y -> W_nonconvex(y, xargs...), bt.nodes[idx].F, :all)
         W += W_temp; 𝐏 += 𝐏_temp; 𝔸 += 𝔸_temp
     else
-        𝔸⁻, 𝐏⁻, W⁻ = eval(node.minus,W_nonconvex,xargs...)
-        𝔸⁺, 𝐏⁺, W⁺ = eval(node.plus,W_nonconvex,xargs...)
-        ξ = node.plus.ξ
+        𝔸⁻, 𝐏⁻, W⁻ = eval(bt, minus_idx(idx), W_nonconvex, xargs...)
+        𝔸⁺, 𝐏⁺, W⁺ = eval(bt, plus_idx(idx), W_nonconvex, xargs...)
+        ξ = bt.nodes[plus_idx(idx)].ξ
         W += ξ*W⁺+(1-ξ)*W⁻; 𝐏 += ξ*𝐏⁺+(1-ξ)*𝐏⁻; 𝔸 += ξ*𝔸⁺+(1-ξ)*𝔸⁻
     end
     return 𝔸, 𝐏, W
 end
 
-function NumericalRelaxation.eval(node::BinaryLaminationTree{dim}, F::Tensor{2,dim}, laminate::Laminate{dim}, W_nonconvex::FUN, xargs::Vararg{Any,XN}) where {dim,FUN,XN}
+function NumericalRelaxation.eval(bt::BinaryLaminationTree{dim}, W_nonconvex::FUN, xargs::Vararg{Any,XN}) where {dim,FUN,XN}
+    return eval(bt, 1, W_nonconvex, xargs...)
+end
+
+function NumericalRelaxation.eval(bt::BinaryLaminationTree{dim}, idx::Int, F::Tensor{2,dim}, laminate::Laminate{dim}, W_nonconvex::FUN, xargs::Vararg{Any,XN}) where {dim,FUN,XN}
     W = 0.0
     𝐏 = zero(Tensor{2,dim})
     𝔸 = zero(Tensor{4,dim})
-    if node.minus === nothing && node.plus === nothing
-        if node.F ≈ F
+    if isleaf(bt, idx)
+        if bt.nodes[idx].F ≈ F
             𝔸⁻, 𝐏⁻, W⁻ = Tensors.hessian(y -> W_nonconvex(y, xargs...), laminate.F⁻, :all)
             𝔸⁺, 𝐏⁺, W⁺ = Tensors.hessian(y -> W_nonconvex(y, xargs...), laminate.F⁺, :all)
             ξ = norm(F - laminate.F⁻) / norm(laminate.F⁺ - laminate.F⁻)
             W += ξ*W⁺+(1-ξ)*W⁻; 𝐏 += ξ*𝐏⁺+(1-ξ)*𝐏⁻; 𝔸 += ξ*𝔸⁺+(1-ξ)*𝔸⁻
         else
-            𝔸_temp, 𝐏_temp, W_temp = Tensors.hessian(y -> W_nonconvex(y, xargs...), node.F, :all)
+            𝔸_temp, 𝐏_temp, W_temp = Tensors.hessian(y -> W_nonconvex(y, xargs...), bt.nodes[idx].F, :all)
             W += W_temp; 𝐏 += 𝐏_temp; 𝔸 += 𝔸_temp
         end
     else
-        𝔸⁻, 𝐏⁻, W⁻ = eval(node.minus,F,laminate,W_nonconvex,xargs...)
-        𝔸⁺, 𝐏⁺, W⁺ = eval(node.plus,F,laminate,W_nonconvex,xargs...)
-        ξ = node.plus.ξ
+        𝔸⁻, 𝐏⁻, W⁻ = eval(bt, minus_idx(idx), F, laminate, W_nonconvex, xargs...)
+        𝔸⁺, 𝐏⁺, W⁺ = eval(bt, plus_idx(idx), F, laminate, W_nonconvex, xargs...)
+        ξ = bt.nodes[plus_idx(idx)].ξ
         W += ξ*W⁺+(1-ξ)*W⁻; 𝐏 += ξ*𝐏⁺+(1-ξ)*𝐏⁻; 𝔸 += ξ*𝔸⁺+(1-ξ)*𝔸⁻
     end
     return 𝔸, 𝐏, W
 end
 
+function NumericalRelaxation.eval(bt::BinaryLaminationTree{dim}, F::Tensor{2,dim}, laminate::Laminate{dim}, W_nonconvex::FUN, xargs::Vararg{Any,XN}) where {dim,FUN,XN}
+    return eval(bt, 1, F, laminate, W_nonconvex, xargs...)
+end
+
 function checkintegrity(tree::BinaryLaminationTree,tol=1e-4)
     isintegre = true
-    for node in AbstractTrees.StatelessBFS(tree)
-        if node.minus === nothing && node.plus === nothing
-            continue
-        end
-        F = node.F
-        W = node.W
-        points = [node.minus.F, node.plus.F]
-        weights = [node.minus.ξ, node.plus.ξ]
-        W_values = [node.minus.W, node.plus.W]
+    for i in 1:length(tree.active)
+        !tree.active[i] && continue
+        isleaf(tree, i) && continue
+        F = tree.nodes[i].F
+        mi = minus_idx(i)
+        pi = plus_idx(i)
+        points = [tree.nodes[mi].F, tree.nodes[pi].F]
+        weights = [tree.nodes[mi].ξ, tree.nodes[pi].ξ]
         isintegre = isapprox(F,sum(points .* weights),atol=tol) && rank(points[2] - points[1]) < 2
         if !isintegre
-            isintegre = false
             break
         end
     end
@@ -1529,19 +1594,20 @@ function rotationangles(R::Tensor{2,3})
 end
 
 function rotate!(bt::BinaryLaminationTree,args...)
-    for node in PreOrderDFS(bt)
-        node.F = Tensors.rotate(node.F,args...)
+    for i in 1:length(bt.active)
+        bt.active[i] || continue
+        node = bt.nodes[i]
+        bt.nodes[i] = BinaryLaminationTreeNode(Tensors.rotate(node.F,args...), node.W, node.ξ, node.level)
     end
 end
 
 function rotate(bt::BinaryLaminationTree,args...)
-    new_bt = deepcopy(bt)
+    new_bt = BinaryLaminationTree(copy(bt.nodes), copy(bt.active))
     rotate!(new_bt,args...)
     return new_bt
 end
 
 function rotationaverage(bt::BinaryLaminationTree{2},W::FUN,xargs::Vararg{Any,N}) where {FUN,N}
-    #angle = rotation_tensor(bt.F) |> rotationangles
     𝔸, 𝐏, W_ref = eval(bt, W, xargs...)
     bt_rotate = rotate(bt,0)
     angles = pi/180:pi/180:pi
@@ -1575,35 +1641,66 @@ function rotationaverage(bt::BinaryLaminationTree{3},W::FUN,xargs::Vararg{Any,N}
     return 𝔸/counter, 𝐏/counter, W_ref/counter
 end
 
-function equilibrium(node,W::FUN,xargs::Vararg{Any,N}) where {FUN,N}
-   isroot(node) && return (0.0,children(node))
-   p = AbstractTrees.parent(node)
-   sibling = node == p.plus ? p.minus : p.plus
-   λ₁ = node.ξ; λ₂ = sibling.ξ
-   A = node == p.plus ? node.F - sibling.F : sibling.F - node.F
-   W⁺ = node == p.plus ? node.W : sibling.W
-   W⁻ = node == p.minus ? node.W : sibling.W
-   P₁ = Tensors.gradient(y->W(y,xargs...),node.F)
-   P₂ = Tensors.gradient(y->W(y,xargs...),sibling.F)
-   return ((W⁺-W⁻)-((λ₁*P₁+λ₂*P₂)⊡(A)),children(node))
+# NodeView wrapper for AbstractTrees interface and external callbacks
+struct NodeView{dim,T,N}
+    tree::BinaryLaminationTree{dim,T,N}
+    idx::Int
 end
 
-AbstractTrees.printnode(io::IO, node::BinaryLaminationTree) = print(io, "$(node.F) ξ=$(node.ξ)")
-AbstractTrees.ParentLinks(::Type{<:BinaryLaminationTree}) = AbstractTrees.StoredParents()
-AbstractTrees.SiblingLinks(::Type{<:BinaryLaminationTree}) = AbstractTrees.ImplicitSiblings()
-Base.show(io::IO, ::MIME"text/plain", tree::BinaryLaminationTree) = AbstractTrees.print_tree(io, tree)
-Base.eltype(::Type{<:AbstractTrees.TreeIterator{BinaryLaminationTree{dim,T,N}}}) where {dim,T,N} = BinaryLaminationTree{dim,T,N}
-Base.IteratorEltype(::Type{<:AbstractTrees.TreeIterator{BinaryLaminationTree{dim,T,N}}}) where {dim,T,N} = Base.HasEltype()
+Base.getproperty(nv::NodeView, s::Symbol) = _nv_getproperty(nv, Val(s))
+_nv_getproperty(nv::NodeView, ::Val{:tree}) = getfield(nv, :tree)
+_nv_getproperty(nv::NodeView, ::Val{:idx}) = getfield(nv, :idx)
+_nv_getproperty(nv::NodeView, ::Val{:F}) = getfield(nv, :tree).nodes[getfield(nv, :idx)].F
+_nv_getproperty(nv::NodeView, ::Val{:W}) = getfield(nv, :tree).nodes[getfield(nv, :idx)].W
+_nv_getproperty(nv::NodeView, ::Val{:ξ}) = getfield(nv, :tree).nodes[getfield(nv, :idx)].ξ
+_nv_getproperty(nv::NodeView, ::Val{:level}) = getfield(nv, :tree).nodes[getfield(nv, :idx)].level
+function _nv_getproperty(nv::NodeView, ::Val{:minus})
+    bt = getfield(nv, :tree)
+    mi = minus_idx(getfield(nv, :idx))
+    mi ≤ length(bt.active) && bt.active[mi] ? NodeView(bt, mi) : nothing
+end
+function _nv_getproperty(nv::NodeView, ::Val{:plus})
+    bt = getfield(nv, :tree)
+    pi = plus_idx(getfield(nv, :idx))
+    pi ≤ length(bt.active) && bt.active[pi] ? NodeView(bt, pi) : nothing
+end
+function _nv_getproperty(nv::NodeView, ::Val{:parent})
+    idx = getfield(nv, :idx)
+    idx == 1 ? nothing : NodeView(getfield(nv, :tree), parent_idx(idx))
+end
 
-AbstractTrees.parent(node::BinaryLaminationTree) = node.parent
-function AbstractTrees.children(node::BinaryLaminationTree)
-    if !isnothing(node.minus)
-        if !isnothing(node.plus)
-            return (node.minus, node.plus)
+function equilibrium(nv::NodeView,W::FUN,xargs::Vararg{Any,N}) where {FUN,N}
+   nv.idx == 1 && return (0.0,AbstractTrees.children(nv))
+   p = nv.parent
+   sibling = nv.idx == plus_idx(p.idx) ? p.minus : p.plus
+   λ₁ = nv.ξ; λ₂ = sibling.ξ
+   A = nv.idx == plus_idx(p.idx) ? nv.F - sibling.F : sibling.F - nv.F
+   W⁺ = nv.idx == plus_idx(p.idx) ? nv.W : sibling.W
+   W⁻ = nv.idx == minus_idx(p.idx) ? nv.W : sibling.W
+   P₁ = Tensors.gradient(y->W(y,xargs...),nv.F)
+   P₂ = Tensors.gradient(y->W(y,xargs...),sibling.F)
+   return ((W⁺-W⁻)-((λ₁*P₁+λ₂*P₂)⊡(A)),AbstractTrees.children(nv))
+end
+
+AbstractTrees.printnode(io::IO, nv::NodeView) = print(io, "$(nv.F) ξ=$(nv.ξ)")
+AbstractTrees.printnode(io::IO, bt::BinaryLaminationTree) = AbstractTrees.printnode(io, NodeView(bt, 1))
+AbstractTrees.ParentLinks(::Type{<:NodeView}) = AbstractTrees.StoredParents()
+AbstractTrees.SiblingLinks(::Type{<:NodeView}) = AbstractTrees.ImplicitSiblings()
+Base.show(io::IO, ::MIME"text/plain", tree::BinaryLaminationTree) = AbstractTrees.print_tree(io, NodeView(tree, 1))
+Base.eltype(::Type{<:AbstractTrees.TreeIterator{NodeView{dim,T,N}}}) where {dim,T,N} = NodeView{dim,T,N}
+Base.IteratorEltype(::Type{<:AbstractTrees.TreeIterator{NodeView{dim,T,N}}}) where {dim,T,N} = Base.HasEltype()
+
+AbstractTrees.parent(nv::NodeView) = nv.parent
+function AbstractTrees.children(nv::NodeView)
+    m = nv.minus
+    p = nv.plus
+    if !isnothing(m)
+        if !isnothing(p)
+            return (m, p)
         end
-        return (node.minus,)
+        return (m,)
     end
-    !isnothing(node.plus) && return (node.plus,)
+    !isnothing(p) && return (p,)
     return ()
 end
 
