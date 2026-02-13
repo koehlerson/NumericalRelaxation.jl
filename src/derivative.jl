@@ -166,7 +166,7 @@ function FlexibleLaminateTree(F::Tensor{2,dim,T,N},r1convexification::R1Convexif
     return root
 end
 
-function eval(node::FlexibleLaminateTree{dim}, W_nonconvex::Function, xargs...) where dim
+function NumericalRelaxation.eval(node::FlexibleLaminateTree{dim}, W_nonconvex::Function, xargs...) where dim
     W = 0.0
     𝐏 = zero(Tensor{2,dim})
     𝔸 = zero(Tensor{4,dim})

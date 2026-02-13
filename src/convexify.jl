@@ -1435,7 +1435,7 @@ function laminatekernel(𝐀::Tensor{2,dim,T,N},convexification::HROC, buffer::H
     return laminate
 end
 
-function eval(node::BinaryLaminationTree{dim}, W_nonconvex::FUN, xargs::Vararg{Any,XN}) where {dim,FUN,XN}
+function NumericalRelaxation.eval(node::BinaryLaminationTree{dim}, W_nonconvex::FUN, xargs::Vararg{Any,XN}) where {dim,FUN,XN}
     W = 0.0
     𝐏 = zero(Tensor{2,dim})
     𝔸 = zero(Tensor{4,dim})
@@ -1451,7 +1451,7 @@ function eval(node::BinaryLaminationTree{dim}, W_nonconvex::FUN, xargs::Vararg{A
     return 𝔸, 𝐏, W
 end
 
-function eval(node::BinaryLaminationTree{dim}, F::Tensor{2,dim}, laminate::Laminate{dim}, W_nonconvex::FUN, xargs::Vararg{Any,XN}) where {dim,FUN,XN}
+function NumericalRelaxation.eval(node::BinaryLaminationTree{dim}, F::Tensor{2,dim}, laminate::Laminate{dim}, W_nonconvex::FUN, xargs::Vararg{Any,XN}) where {dim,FUN,XN}
     W = 0.0
     𝐏 = zero(Tensor{2,dim})
     𝔸 = zero(Tensor{4,dim})
