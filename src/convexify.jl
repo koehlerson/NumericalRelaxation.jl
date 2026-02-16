@@ -1193,7 +1193,7 @@ end
 isleaf(bt::BinaryLaminationTree, i::Int) = !haschildren(bt, i)
 
 function _make_tree(::Type{Tensor{2,dim,T,N}}, maxlevel) where {dim,T,N}
-    maxnodes = (1 << (maxlevel + 2)) - 1
+    maxnodes = 3
     nodes = Vector{BinaryLaminationTreeNode{dim,T,N}}(undef, maxnodes)
     active = falses(maxnodes)
     return BinaryLaminationTree{dim,T,N}(nodes, active)
