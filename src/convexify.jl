@@ -1254,7 +1254,9 @@ function BinaryLaminationTree(prev_F,prev_bt::BinaryLaminationTree, convexificat
     bt = _make_tree(Tensor{2,dim,T,N}, level)
     _setnode!(bt, 1, BinaryLaminationTreeNode(F, zero(T), one(T), level + 1))
     diss_offset = 0.0
-    laminate = hrockernel(zero(typeof(F)),prev_F,prev_bt,bt,convexification,buffer,constraint,diss_offset,W,F,xargs...)
+    # CE at root level only: prefer the previous root direction if it still gives energy reduction.
+    root_prev_direction = haschildren(prev_F, 1) ? rankonedir(prev_F, 1) : zero(typeof(F))
+    laminate = hrockernel(root_prev_direction,prev_F,prev_bt,bt,convexification,buffer,constraint,diss_offset,W,F,xargs...)
     if laminate === nothing
         return bt
     end
@@ -1269,13 +1271,15 @@ function BinaryLaminationTree(prev_F,prev_bt::BinaryLaminationTree, convexificat
         end
         _setnode!(bt, minus_idx(pidx), BinaryLaminationTreeNode(lc.F⁻, lc.W⁻, (1.0 - ξ), level))
         _setnode!(bt, plus_idx(pidx), BinaryLaminationTreeNode(lc.F⁺, lc.W⁺, ξ, level))
-        prev_direction = rankonedir(bt, pidx)
         level = bt.nodes[pidx].level - 1
         if level > 0
             prev_plus_idx = haschildren(prev_bt, prev_pidx) ? plus_idx(prev_pidx) : prev_pidx
             prev_minus_idx = haschildren(prev_bt, prev_pidx) ? minus_idx(prev_pidx) : prev_pidx
-            laminate⁺ = hrockernel(prev_direction,prev_F,prev_bt,bt,convexification,buffer,constraint,diss_offset,W,lc.F⁺,xargs...)
-            laminate⁻ = hrockernel(prev_direction,prev_F,prev_bt,bt,convexification,buffer,constraint,diss_offset,W,lc.F⁻,xargs...)
+            # Continuity enforcement disabled — global search at child level.
+            # prev_direction⁺ = haschildren(prev_F, prev_plus_idx) ? rankonedir(prev_F, prev_plus_idx) : rankonedir(bt, pidx)
+            # prev_direction⁻ = haschildren(prev_F, prev_minus_idx) ? rankonedir(prev_F, prev_minus_idx) : rankonedir(bt, pidx)
+            laminate⁺ = hrockernel(zero(F),prev_F,prev_bt,bt,convexification,buffer,constraint,diss_offset,W,lc.F⁺,xargs...)
+            laminate⁻ = hrockernel(zero(F),prev_F,prev_bt,bt,convexification,buffer,constraint,diss_offset,W,lc.F⁻,xargs...)
             !irr(constraint,NodeView(prev_bt,prev_pidx),lc.F⁺,xargs...) && !(laminate⁺ === nothing) && push!(queue,(plus_idx(pidx), laminate⁺, prev_plus_idx))
             !irr(constraint,NodeView(prev_bt,prev_pidx),lc.F⁻,xargs...) && !(laminate⁻ === nothing) && push!(queue,(minus_idx(pidx), laminate⁻, prev_minus_idx))
         end
@@ -1390,13 +1394,13 @@ function hrockernel(prev_direction,prev_F,prev::BinaryLaminationTree, root::Bina
     W_ref = W(F,xargs...)
     𝔸_ref, _, W_glob_ref = eval(root,W,xargs...)
     laminate = nothing
-    for 𝐀 in convexification.dirs
-        if same_as_previous(𝐀,prev_direction)
-            continue
-        end
+    # CE: try prev_direction first (only active when non-zero, i.e. at root level).
+    # Children pass zero(F), so the iszero guard skips it there → free search at child level.
+    for (try_prev, 𝐀_raw) in Iterators.flatten((((true, prev_direction),), ((false, a) for a in convexification.dirs)))
+        iszero(𝐀_raw) && continue
+        !try_prev && same_as_previous(𝐀_raw, prev_direction) && continue
         fill!(buffer) # fill buffers with zeros
-        _δ = minimum(δ(convexification, 𝐀))
-        𝐀 *= _δ
+        𝐀 = 𝐀_raw * minimum(δ(convexification, 𝐀_raw))
         if norm(𝐀,Inf) > 0
             ctr_fw = 0
             ctr_bw = 0
@@ -1439,6 +1443,7 @@ function hrockernel(prev_direction,prev_F,prev::BinaryLaminationTree, root::Bina
                     𝔸_ref = 𝔸
                     W_glob_ref = W_glob_trial
                     laminate = lc
+                    try_prev && return laminate  # CE: root prev direction works — accept immediately
                 end
             end
         end
