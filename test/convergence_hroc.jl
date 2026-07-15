@@ -242,10 +242,11 @@ PGFPlotsX.save("Multi_hroc.tex", Multi_hroc, include_preamble=false)
 WCALLS = Ref(0)
 
 polish_variants = [
-    (false, :compass,       "discrete",      "black"),
-    (true,  :compass,       "compass",       "gray"),
-    (true,  :bfgs_ad,       "BFGS-AD",       "orange!80!black"),
-    (true,  :bfgs_analytic, "BFGS-analytic", "blue!70!black"),
+    (nothing,                        "discrete",      "black"),
+    (CompassSearch(),                "compass",       "gray"),
+    (BFGS(gradient=ADGradient()),    "BFGS-AD",       "orange!80!black"),
+    (BFGS(),                         "BFGS-analytic", "blue!70!black"),
+    (Adam(),                         "Adam+BFGS",     "green!55!black"),
 ]
 Ns_polish = Int[10, 50, 100, 300, 500, 1000, 3000, 5000, 10_000]
 
@@ -253,10 +254,10 @@ function polish_comparison(Wfun::FUN, Wrc, points, Ns) where FUN
     Wcount = F -> (WCALLS[] += 1; Wfun(F))
     results = Dict{Tuple{Int,String},NTuple{3,Vector{Float64}}}()
     for (pidx, (F, pname)) in enumerate(points)
-        for (pol, method, label, _) in polish_variants
+        for (optimizer, label, _) in polish_variants
             errs = Float64[]; wcalls = Float64[]; times = Float64[]
             for N in Ns
-                cs = HROC(F_start, F_stop; GLcheck=false, n_convexpoints=N, maxlevel=10, polish=pol, polish_method=method)
+                cs = HROC(F_start, F_stop; GLcheck=false, n_convexpoints=N, maxlevel=10, polish=optimizer)
                 buffer = build_buffer(cs)
                 bt = convexify(cs, buffer, Wfun, F)
                 𝔸, 𝐏, W_val = NumericalRelaxation.eval(bt, Wfun)
@@ -278,7 +279,7 @@ function polish_groupplot(results, points, Ns)
     gp = @pgf GroupPlot({group_style = {group_size = "3 by $(length(points))", "horizontal sep"="2.2cm", "vertical sep"="1.8cm"},
                          height = "5.5cm", width = "6cm"})
     for (pidx, (F, pname)) in enumerate(points)
-        allerrs = vcat((results[(pidx, label)][1] for (_, _, label, _) in polish_variants)...)
+        allerrs = vcat((results[(pidx, label)][1] for (_, label, _) in polish_variants)...)
         # explicit limits: a degenerate log-axis range (all curves at the same level) overflows pgfplots
         e_lo = 10.0^(floor(log10(minimum(allerrs))) - 1)
         e_hi = 10.0^(ceil(log10(maximum(allerrs))) + 1)
@@ -290,7 +291,7 @@ function polish_groupplot(results, points, Ns)
                                  ymin = e_lo, ymax = e_hi, title = pname}))
         ax_wcalls = PGFPlotsX.Axis(@pgf({theme..., ylabel = "W-calls", xlabel = "Grid points N", xmode="log", ymode="log"}))
         ax_time = PGFPlotsX.Axis(@pgf({theme..., ylabel = "time (s)", xlabel = "Grid points N", xmode="log", ymode="log"}))
-        for (pol, method, label, clr) in polish_variants
+        for (optimizer, label, clr) in polish_variants
             errs, wcalls, times = results[(pidx, label)]
             push!(ax_err, @pgf Plot({mark="none", thick, color=clr}, Table(Ns, errs)))
             pidx == 1 && push!(ax_err, LegendEntry(label))

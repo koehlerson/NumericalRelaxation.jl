@@ -1096,14 +1096,108 @@ function convexify!(buffer::HROCBuffer,ctr::Int)
     return convexify!(buffer.initial.values,buffer.initial.grid,ctr,buffer.convex.values,buffer.convex.grid)
 end
 
+"""
+    AbstractPolishOptimizer
+Supertype of the optimizers usable in the polish stage of [`HROC`](@ref):
+[`CompassSearch`](@ref), [`BFGS`](@ref) and [`Adam`](@ref).
+Each optimizer holds its own hyperparameters; the actual minimization dispatches on the type
+via `polish_minimize!(optimizer, p, offsets, F, admissible, W, xargs...)`.
+"""
+abstract type AbstractPolishOptimizer end
+
+"""
+    AnalyticGradient()
+Gradient backend for [`BFGS`](@ref): assembles the exact gradient in one reverse sweep over
+the tree from the first Piola-Kirchhoff stresses at the leaves via [`polish_gradient!`](@ref)
+(cost independent of the number of parameters).
+"""
+struct AnalyticGradient end
+
+"""
+    ADGradient()
+Gradient backend for [`BFGS`](@ref): forward-mode automatic differentiation over the parameter
+vector (ForwardDiff). Mainly useful for verification; cost grows with the parameter count.
+"""
+struct ADGradient end
+
+@doc raw"""
+    CompassSearch(; steptol=1e-6, maxsweeps=10_000)
+Zero-order pattern search on the tree parameters. Derivative free and therefore robust for
+non-smooth `W`; linear convergence, the achievable accuracy is set by `steptol`.
+Monotone: never returns a value above the initial energy.
+"""
+Base.@kwdef struct CompassSearch <: AbstractPolishOptimizer
+    steptol::Float64 = 1e-6
+    maxsweeps::Int = 10_000
+end
+
+@doc raw"""
+    BFGS(; gradient=AnalyticGradient(), gtol=1e-10, maxiter=200, stalliter=3, c_armijo=1e-4, ls_maxiter=50, fallback=CompassSearch())
+Dense BFGS with Armijo backtracking on the tree parameters. Infeasible trial points (negative
+offsets, out of bounds, constraint violations) evaluate to `Inf` and are rejected by the
+backtracking, so no explicit constraint handling is needed. Terminates on the gradient norm
+(`gtol`), on `stalliter` consecutive stagnating energies (relevant for non-smooth `W`, where
+the gradient does not vanish at the optimum) or after `maxiter` iterations.
+If no progress is made from the initial point and a `fallback` optimizer is set, the fallback
+is run instead. Monotone: never returns a value above the initial energy.
+"""
+Base.@kwdef struct BFGS{G<:Union{AnalyticGradient,ADGradient}} <: AbstractPolishOptimizer
+    gradient::G = AnalyticGradient()
+    gtol::Float64 = 1e-10
+    maxiter::Int = 200
+    stalliter::Int = 3
+    c_armijo::Float64 = 1e-4
+    ls_maxiter::Int = 50
+    fallback::Union{Nothing,CompassSearch} = CompassSearch()
+end
+
+@doc raw"""
+    Adam(; α=0.02, β1=0.9, β2=0.999, ϵ=1e-8, maxiter=500, restarts=4, σ_angle=0.3, σ_offset=0.2, seed=0x9e3779b97f4a7c15, finish=BFGS())
+Adam (adaptive moment) descent with randomized restarts: besides the unperturbed discrete tree,
+`restarts` perturbed copies of the initial parameters are optimized (direction angles perturbed
+by up to `±σ_angle` radians, offsets relatively by up to `±σ_offset`), and the best result over
+all runs and iterations is kept. The perturbations explore neighbouring laminate basins that
+the deterministic descent from the greedy tree cannot reach; the deterministic run guarantees
+the result is never worse than the initial tree. Steps leading to infeasible parameters are
+rejected with a halved learning rate. If `finish` is set, the best parameters are refined by
+that optimizer afterwards (Adam explores, BFGS sharpens).
+The perturbations are drawn from an internal xorshift generator seeded by `seed`, so results
+are deterministic and reproducible without a dependency on `Random`.
+"""
+Base.@kwdef struct Adam <: AbstractPolishOptimizer
+    α::Float64 = 0.02
+    β1::Float64 = 0.9
+    β2::Float64 = 0.999
+    ϵ::Float64 = 1e-8
+    maxiter::Int = 500
+    restarts::Int = 4
+    σ_angle::Float64 = 0.3
+    σ_offset::Float64 = 0.2
+    seed::UInt64 = 0x9e3779b97f4a7c15
+    finish::Union{Nothing,BFGS} = BFGS()
+end
+
+# minimal deterministic xorshift64* generator for the Adam perturbations (avoids a Random dep)
+@inline function _xorshift(state::UInt64)
+    state ⊻= state << 13
+    state ⊻= state >> 7
+    state ⊻= state << 17
+    return state
+end
+# returns (new state, uniform number in [-1,1])
+@inline function _unitrand(state::UInt64)
+    state = _xorshift(state)
+    return state, 2.0*(state/typemax(UInt64)) - 1.0
+end
+
 @doc raw"""
     HROC{dimp,R1Dir<:RankOneDirections{dimp},T} <: AbstractConvexification
 Holds the specification for performing rank-one convexification by the upper bound described in [this paper](https://arxiv.org/abs/2405.16866).
 Useable by constructing an instance of this type, as well as a buffer by `build_buffer` and calling `convexify` as usual.
 
 # Constructors
-    HROC(maxlevel::Int,n_convexpoints::Int,dir::R1Dir,GLcheck::Bool,start::Tensor{2,dimp,T,dimc},stop::Tensor{2,dimp,T,dimc},polish::Bool=false,polish_method::Symbol=:bfgs_analytic)
-    HROC(start::Tensor{2,dimp},stop::Tensor{2,dimp};maxlevel=10,l=1,dirs=ParametrizedR1Directions(dimp;l=l),GLcheck=true,n_convexpoints=1000,polish=false,polish_method=:bfgs_analytic)
+    HROC(maxlevel::Int,n_convexpoints::Int,dir::R1Dir,GLcheck::Bool,start::Tensor{2,dimp,T,dimc},stop::Tensor{2,dimp,T,dimc},polish=nothing)
+    HROC(start::Tensor{2,dimp},stop::Tensor{2,dimp};maxlevel=10,l=1,dirs=ParametrizedR1Directions(dimp;l=l),GLcheck=true,n_convexpoints=1000,polish=nothing)
 
 # Fields
 - `maxlevel::Int`
@@ -1112,35 +1206,39 @@ Useable by constructing an instance of this type, as well as a buffer by `build_
 - `GLcheck::Bool`
 - `startF::Vector{T}`
 - `endF::Vector{T}`
-- `polish::Bool` if `true`, the discrete lamination tree is post-processed by a joint continuous
-  optimization of all tree parameters (lamination directions and endpoint offsets per internal node),
-  which removes both the direction-set and the line-grid discretization error
-- `polish_method::Symbol` optimizer for the polish stage: `:bfgs_analytic` (BFGS with analytic
-  gradient assembled from the leaf stresses, default), `:bfgs_ad` (BFGS with ForwardDiff gradient)
-  or `:compass` (zero-order pattern search, robust for non-smooth `W`); the BFGS variants fall
-  back to the compass search automatically if they cannot make progress
+- `polish::Union{Nothing,AbstractPolishOptimizer}` if set, the discrete lamination tree is
+  post-processed by a joint continuous optimization of all tree parameters (lamination direction
+  angles and endpoint offsets per internal node) with the given optimizer, which removes the
+  direction-set and line-grid discretization errors of the greedy stage. Available optimizers:
+  [`BFGS`](@ref) (default when `polish=true` is passed), [`CompassSearch`](@ref) (zero order,
+  robust for non-smooth `W`) and [`Adam`](@ref) (randomized restarts around the discrete tree
+  to explore neighbouring laminate basins). The optimizer structs hold their hyperparameters,
+  e.g. `HROC(start, stop; polish=BFGS(gradient=ADGradient(), gtol=1e-12))`.
 
 """
-struct HROC{dimp,R1Dir<:RankOneDirections{dimp},T} <: AbstractConvexification
+struct HROC{dimp,R1Dir<:RankOneDirections{dimp},T,O<:Union{Nothing,AbstractPolishOptimizer}} <: AbstractConvexification
     maxlevel::Int
     n_convexpoints::Int
     dirs::R1Dir
     GLcheck::Bool
     startF::Vector{T}
     endF::Vector{T}
-    polish::Bool
-    polish_method::Symbol
+    polish::O
 end
 
-function HROC(maxlevel::Int,n_convexpoints::Int,dir::R1Dir,GLcheck::Bool,startF::Vector{T},endF::Vector{T},polish::Bool=false) where {dimp,R1Dir<:RankOneDirections{dimp},T}
-    HROC(maxlevel,n_convexpoints,dir,GLcheck,startF,endF,polish,:bfgs_analytic)
+# `polish=true/false` convenience sugar → default BFGS / no polishing
+_polish_optimizer(polish::Bool) = polish ? BFGS() : nothing
+_polish_optimizer(polish::Union{Nothing,AbstractPolishOptimizer}) = polish
+
+function HROC(maxlevel::Int,n_convexpoints::Int,dir::R1Dir,GLcheck::Bool,startF::Vector{T},endF::Vector{T},polish=nothing) where {dimp,R1Dir<:RankOneDirections{dimp},T}
+    HROC(maxlevel,n_convexpoints,dir,GLcheck,startF,endF,_polish_optimizer(polish))
 end
 
-function HROC(maxlevel::Int,n_convexpoints::Int,dir::R1Dir,GLcheck::Bool,start::Tensor{2,dimp,T,dimc},stop::Tensor{2,dimp,T,dimc},polish::Bool=false,polish_method::Symbol=:bfgs_analytic) where {dimp,R1Dir<:RankOneDirections{dimp},T,dimc}
-    HROC(maxlevel,n_convexpoints,dir,GLcheck,collect(start.data),collect(stop.data),polish,polish_method)
+function HROC(maxlevel::Int,n_convexpoints::Int,dir::R1Dir,GLcheck::Bool,start::Tensor{2,dimp,T,dimc},stop::Tensor{2,dimp,T,dimc},polish=nothing) where {dimp,R1Dir<:RankOneDirections{dimp},T,dimc}
+    HROC(maxlevel,n_convexpoints,dir,GLcheck,collect(start.data),collect(stop.data),_polish_optimizer(polish))
 end
 
-HROC(start::Tensor{2,dimp},stop::Tensor{2,dimp};maxlevel=10,l=1,dirs=ParametrizedR1Directions(dimp;l=l),GLcheck=true,n_convexpoints=1000,polish=false,polish_method=:bfgs_analytic) where {dimp} = HROC(maxlevel,n_convexpoints,dirs,GLcheck,start,stop,polish,polish_method)
+HROC(start::Tensor{2,dimp},stop::Tensor{2,dimp};maxlevel=10,l=1,dirs=ParametrizedR1Directions(dimp;l=l),GLcheck=true,n_convexpoints=1000,polish=nothing) where {dimp} = HROC(maxlevel,n_convexpoints,dirs,GLcheck,start,stop,_polish_optimizer(polish))
 
 function build_buffer(convexification::HROC{dimp,R1Dir,T}) where {dimp,R1Dir <: RankOneDirections{dimp}, T}
     F = zeros(Int,convexification.n_convexpoints+2)
@@ -1259,7 +1357,7 @@ function BinaryLaminationTree(convexification::HROC, buffer::HROCBuffer, W::FUN,
             !(laminate⁻ === nothing) && push!(queue,(minus_idx(pidx), laminate⁻))
         end
     end
-    convexification.polish && polish!(bt, convexification, buffer, _admissible(convexification), W, F, xargs...)
+    convexification.polish === nothing || polish!(bt, convexification, buffer, _admissible(convexification), W, F, xargs...)
     return bt
 end
 
@@ -1298,7 +1396,7 @@ function BinaryLaminationTree(prev_F,prev_bt::BinaryLaminationTree, convexificat
             !irr(constraint,NodeView(prev_bt,prev_pidx),lc.F⁻,xargs...) && !(laminate⁻ === nothing) && push!(queue,(minus_idx(pidx), laminate⁻, prev_minus_idx))
         end
     end
-    if convexification.polish
+    if convexification.polish !== nothing
         admissible = 𝐱 -> _admissible(convexification)(𝐱) && constraint(prev_F,prev_bt,𝐱,xargs...)
         polish!(bt, convexification, buffer, admissible, W, F, xargs...)
     end
@@ -1396,11 +1494,13 @@ function polish_energy(p::AbstractVector{S}, offsets::Dict{Int,Int}, i::Int, F::
 end
 
 """
-    polish_compass!(p, offsets, F, admissible, W, xargs...; steptol=1e-6, maxsweeps=10_000)
-Derivative-free pattern (compass) search on the tree parameters `p`, minimizing `polish_energy`.
-Robust w.r.t. nonsmooth `W`; monotonically improving, hence never worse than the discrete tree.
+    polish_minimize!(opt::AbstractPolishOptimizer, p, offsets, F, admissible, W, xargs...) -> f
+Minimizes [`polish_energy`](@ref) over the tree parameters `p` (mutated in place) with the
+optimizer `opt`, which holds all hyperparameters. Every method is monotone: the returned
+energy is never above the initial one.
 """
-function polish_compass!(p::Vector{T}, offsets::Dict{Int,Int}, F::Tensor{2,dim,T}, admissible::AFUN, W::FUN, xargs::Vararg{Any,XN}; steptol=1e-6, maxsweeps=10_000) where {dim,T,AFUN,FUN,XN}
+function polish_minimize!(opt::CompassSearch, p::Vector{T}, offsets::Dict{Int,Int}, F::Tensor{2,dim,T}, admissible::AFUN, W::FUN, xargs::Vararg{Any,XN}) where {dim,T,AFUN,FUN,XN}
+    steptol = opt.steptol; maxsweeps = opt.maxsweeps
     na = _nangles(Val(dim))
     steps = similar(p)
     for o in values(offsets)
@@ -1481,42 +1581,38 @@ function _gradsweep!(g::Vector{T}, p::Vector{T}, offsets::Dict{Int,Int}, i::Int,
     return ξ*S⁺ + (1-ξ)*S⁻, ξ*T⁺ + (1-ξ)*T⁻
 end
 
-"""
-    polish_bfgs!(p, offsets, F, admissible, W, xargs...; gradient=:analytic, gtol=1e-10, maxiter=200) -> f
-Dense BFGS with Armijo backtracking on the tree parameters, minimizing [`polish_energy`](@ref).
-Infeasible trial points (negative offsets, out of bounds, constraint violations) evaluate to `Inf`
-and are rejected by the backtracking, so no explicit constraint handling is needed.
-`gradient=:analytic` uses [`polish_gradient!`](@ref) (stage 2); `gradient=:automatic` uses
-ForwardDiff over the parameter vector (stage 1). Terminates on gradient norm, on stagnation of
-the energy (relevant for non-smooth `W`, where the gradient does not vanish at the optimum),
-or after `maxiter` iterations. Monotone: the returned energy is never above the initial one.
-"""
-function polish_bfgs!(p::Vector{T}, offsets::Dict{Int,Int}, F::Tensor{2,dim,T}, admissible::AFUN, W::FUN, xargs::Vararg{Any,XN}; gradient=:analytic, gtol=1e-10, maxiter=200) where {dim,T,AFUN,FUN,XN}
+function _make_gradient(::AnalyticGradient, E::EFUN, p::Vector, offsets::Dict{Int,Int}, F::Tensor{2}, W::FUN, xargs::Vararg{Any,XN}) where {EFUN,FUN,XN}
+    return (g, q) -> polish_gradient!(g, q, offsets, F, W, xargs...)
+end
+
+function _make_gradient(::ADGradient, E::EFUN, p::Vector, offsets::Dict{Int,Int}, F::Tensor{2}, W::FUN, xargs::Vararg{Any,XN}) where {EFUN,FUN,XN}
+    cfg = ForwardDiff.GradientConfig(E, p)
+    return (g, q) -> ForwardDiff.gradient!(g, E, q, cfg)
+end
+
+function polish_minimize!(opt::BFGS, p::Vector{T}, offsets::Dict{Int,Int}, F::Tensor{2,dim,T}, admissible::AFUN, W::FUN, xargs::Vararg{Any,XN}) where {dim,T,AFUN,FUN,XN}
     E = q -> polish_energy(q, offsets, 1, F, admissible, W, xargs...)
-    local cfg
-    if gradient === :automatic
-        cfg = ForwardDiff.GradientConfig(E, p)
-    end
-    grad! = (g, q) -> gradient === :automatic ? ForwardDiff.gradient!(g, E, q, cfg) : polish_gradient!(g, q, offsets, F, W, xargs...)
+    grad! = _make_gradient(opt.gradient, E, p, offsets, F, W, xargs...)
     n = length(p)
     H = Matrix{T}(T(0.01)*I, n, n)
     g = zeros(T, n); g_new = zeros(T, n)
-    f = E(p)
-    isfinite(f) || return f
+    f0 = E(p)
+    isfinite(f0) || return f0
+    f = f0
     grad!(g, p)
     stall = 0
-    for _ in 1:maxiter
-        maximum(abs, g) < gtol && break
-        stall ≥ 3 && break # energy stagnated: converged or non-smooth kink
+    for _ in 1:opt.maxiter
+        maximum(abs, g) < opt.gtol && break
+        stall ≥ opt.stalliter && break # energy stagnated: converged or non-smooth kink
         d = -H*g
         if dot(d, g) ≥ 0 # not a descent direction: reset curvature
             H .= Matrix{T}(T(0.01)*I, n, n)
             d = -H*g
         end
         α = one(T); f_new = T(Inf); accepted = false
-        for _ in 1:50
+        for _ in 1:opt.ls_maxiter
             f_new = E(p .+ α.*d)
-            if isfinite(f_new) && f_new ≤ f + T(1e-4)*α*dot(g, d)
+            if isfinite(f_new) && f_new ≤ f + T(opt.c_armijo)*α*dot(g, d)
                 accepted = true
                 break
             end
@@ -1534,26 +1630,64 @@ function polish_bfgs!(p::Vector{T}, offsets::Dict{Int,Int}, F::Tensor{2,dim,T}, 
         stall = (f - f_new) < 1e-14*max(one(T), abs(f)) ? stall + 1 : 0
         copyto!(p, p_new); f = f_new; copyto!(g, g_new)
     end
+    if !(f < f0) && opt.fallback !== nothing
+        # no progress from the initial point (e.g. seeded on a kink of a non-smooth W)
+        f = polish_minimize!(opt.fallback, p, offsets, F, admissible, W, xargs...)
+    end
     return f
 end
 
-"""
-    polish_minimize!(method::Symbol, p, offsets, F, admissible, W, xargs...; steptol=1e-6, maxsweeps=10_000) -> f
-Dispatches the polish optimization to `method`:
-`:compass` (zero order pattern search), `:bfgs_ad` (BFGS + ForwardDiff gradient) or
-`:bfgs_analytic` (BFGS + analytic gradient from leaf stresses).
-The BFGS variants fall back to the compass search if they make no progress from the initial
-point (e.g. seeded exactly on a kink of a non-smooth `W`), so the result is never worse than
-the zero-order method at its own tolerance.
-"""
-function polish_minimize!(method::Symbol, p::Vector{T}, offsets::Dict{Int,Int}, F::Tensor{2,dim,T}, admissible::AFUN, W::FUN, xargs::Vararg{Any,XN}; steptol=1e-6, maxsweeps=10_000) where {dim,T,AFUN,FUN,XN}
-    method === :compass && return polish_compass!(p, offsets, F, admissible, W, xargs...; steptol=steptol, maxsweeps=maxsweeps)
-    f0 = polish_energy(p, offsets, 1, F, admissible, W, xargs...)
-    f = polish_bfgs!(p, offsets, F, admissible, W, xargs...; gradient = method === :bfgs_ad ? :automatic : :analytic)
-    if !(f < f0) # no progress: non-smooth stall right at the initial point → zero-order fallback
-        f = polish_compass!(p, offsets, F, admissible, W, xargs...; steptol=steptol, maxsweeps=maxsweeps)
+function polish_minimize!(opt::Adam, p::Vector{T}, offsets::Dict{Int,Int}, F::Tensor{2,dim,T}, admissible::AFUN, W::FUN, xargs::Vararg{Any,XN}) where {dim,T,AFUN,FUN,XN}
+    E = q -> polish_energy(q, offsets, 1, F, admissible, W, xargs...)
+    na = _nangles(Val(dim))
+    n = length(p)
+    g = zeros(T, n); m = zeros(T, n); v = zeros(T, n)
+    best_p = copy(p)
+    best_f = E(p)
+    state = opt.seed
+    for r in 0:opt.restarts
+        q = copy(p)
+        if r > 0 # perturb the unpolished tree to explore neighbouring laminate basins
+            for o in values(offsets)
+                for k in 0:2na-1 # direction angles
+                    state, u = _unitrand(state)
+                    q[o+k] += opt.σ_angle * u
+                end
+                for k in (2na, 2na+1) # offsets, kept non-negative
+                    state, u = _unitrand(state)
+                    q[o+k] = max(q[o+k] * (1 + opt.σ_offset * u), zero(T))
+                end
+            end
+            isfinite(E(q)) || continue # perturbation left the admissible set: skip this restart
+        end
+        Base.fill!(m, zero(T)); Base.fill!(v, zero(T))
+        α = opt.α
+        f = E(q)
+        for t in 1:opt.maxiter
+            polish_gradient!(g, q, offsets, F, W, xargs...)
+            all(isfinite, g) || break
+            m .= opt.β1 .* m .+ (1 - opt.β1) .* g
+            v .= opt.β2 .* v .+ (1 - opt.β2) .* g.^2
+            m̂ = m ./ (1 - opt.β1^t)
+            v̂ = v ./ (1 - opt.β2^t)
+            q_trial = q .- α .* m̂ ./ (sqrt.(v̂) .+ opt.ϵ)
+            f_trial = E(q_trial)
+            if isfinite(f_trial)
+                q = q_trial; f = f_trial
+                if f < best_f
+                    best_f = f
+                    copyto!(best_p, q)
+                end
+            else
+                α /= 2 # step left the admissible set: reject and damp
+            end
+        end
     end
-    return f
+    copyto!(p, best_p)
+    if opt.finish !== nothing # Adam explores, the finisher sharpens
+        best_f = polish_minimize!(opt.finish, p, offsets, F, admissible, W, xargs...)
+    end
+    return best_f
 end
 
 function _deactivate_subtree!(bt::BinaryLaminationTree, i::Int)
@@ -1592,24 +1726,26 @@ function polish_apply!(bt::BinaryLaminationTree{dim,T}, p::Vector{T}, offsets::D
 end
 
 """
-    polish!(bt::BinaryLaminationTree, convexification::HROC, buffer::HROCBuffer, admissible, W, F, xargs...; steptol=1e-6, maxsweeps=10_000, maxdepth=4) -> bt
+    polish!(bt::BinaryLaminationTree, convexification::HROC, buffer::HROCBuffer, admissible, W, F, xargs...; maxdepth=4) -> bt
 Post-processes a discrete HROC lamination tree by jointly optimizing all lamination directions
 and endpoint offsets (fixed topology, truncated at tree depth `maxdepth` — greedy refinement
 chains beyond that depth are redundant once the remaining parameters are jointly optimal and
 only deteriorate the optimization, see [`polish_parameters`](@ref)), then writes the optimized
-laminate back into the tree. If the discrete stage found no laminate at all (trivial tree),
+laminate back into the tree. The optimizer instance (with its hyperparameters) is taken from
+`convexification.polish`, see [`AbstractPolishOptimizer`](@ref).
+If the discrete stage found no laminate at all (trivial tree),
 a speculative rank-two template split is seeded and optimized instead, which resolves regions
 where a single lamination of the unrelaxed `W` is not energy-decreasing although the rank-one
 convex envelope lies below `W` (e.g. the second-order laminate region of the Kohn-Strang-Dolzmann
-example). Enabled via the `polish=true` option of [`HROC`](@ref).
+example). Enabled via the `polish` option of [`HROC`](@ref).
 """
-function polish!(bt::BinaryLaminationTree{dim,T}, convexification::HROC, buffer::HROCBuffer, admissible::AFUN, W::FUN, F::Tensor{2,dim,T}, xargs::Vararg{Any,XN}; steptol=1e-6, maxsweeps=10_000, maxdepth::Int=4) where {dim,T,AFUN,FUN,XN}
+function polish!(bt::BinaryLaminationTree{dim,T}, convexification::HROC, buffer::HROCBuffer, admissible::AFUN, W::FUN, F::Tensor{2,dim,T}, xargs::Vararg{Any,XN}; maxdepth::Int=4) where {dim,T,AFUN,FUN,XN}
     if haschildren(bt, 1)
         p, offsets = polish_parameters(bt; maxdepth=maxdepth)
-        polish_minimize!(convexification.polish_method, p, offsets, F, admissible, W, xargs...; steptol=steptol, maxsweeps=maxsweeps)
+        polish_minimize!(convexification.polish, p, offsets, F, admissible, W, xargs...)
         polish_apply!(bt, p, offsets, 1, F, bt.nodes[1].ξ, W, xargs...)
     else
-        polish_speculate!(bt, convexification, buffer, admissible, W, F, xargs...; steptol=steptol, maxsweeps=maxsweeps)
+        polish_speculate!(bt, convexification, buffer, admissible, W, F, xargs...)
     end
     return bt
 end
@@ -1623,13 +1759,14 @@ function _split_angles(D::Tensor{2,dim,T}) where {dim,T}
 end
 
 """
-    polish_speculate!(bt, convexification, buffer, admissible, W, F, xargs...; steptol, maxsweeps, n_scan=256)
+    polish_speculate!(bt, convexification, buffer, admissible, W, F, xargs...; n_scan=256, n_speculate=2)
 Speculative polishing for points where the greedy stage found no laminate. Rank-one lines through `F`
 are ranked by the minimum of `W` along them; for the best candidates a rank-two template tree is
 seeded (root endpoint `F⁺` at the line minimum, its child split obtained by `hrockernel`) and
-jointly optimized. The result is only accepted if it is strictly below `W(F)`.
+jointly optimized with `convexification.polish`. The result is only accepted if it is strictly
+below `W(F)`.
 """
-function polish_speculate!(bt::BinaryLaminationTree{dim,T,N}, convexification::HROC, buffer::HROCBuffer, admissible::AFUN, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}; steptol=1e-6, maxsweeps=10_000, n_scan=256, n_speculate=2) where {dim,T,N,AFUN,FUN,XN}
+function polish_speculate!(bt::BinaryLaminationTree{dim,T,N}, convexification::HROC, buffer::HROCBuffer, admissible::AFUN, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}; n_scan=256, n_speculate=2) where {dim,T,N,AFUN,FUN,XN}
     W_ref = W(F, xargs...)
     span = norm(Tensor{2,dim,T,N}(NTuple{dim*dim,T}(convexification.endF[i] - convexification.startF[i] for i in 1:dim*dim)))
     # rank all directions by the minimum of W along their line through F
@@ -1671,7 +1808,7 @@ function polish_speculate!(bt::BinaryLaminationTree{dim,T,N}, convexification::H
             f < f_init && ((p_init, f_init) = (p, f))
         end
         isempty(p_init) && continue
-        f = polish_minimize!(convexification.polish_method, p_init, offsets, F, admissible, W, xargs...; steptol=steptol, maxsweeps=maxsweeps)
+        f = polish_minimize!(convexification.polish, p_init, offsets, F, admissible, W, xargs...)
         f < best_f && ((best_f, best_p) = (f, p_init))
     end
     best_f < W_ref || return bt # speculation did not improve upon W(F): keep the trivial tree

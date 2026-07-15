@@ -182,8 +182,8 @@ end
     F_stop  = ones(Tensor{2,2})*3
     F_lam   = Tensor{2,2}([0.2 0.1; 0.1 0.3])     # greedy stage finds a lamination tree here
     F_stuck = Tensor{2,2}([-0.35 0.0; 0.0 -0.45]) # greedy stage finds no laminate here (rank-two region)
-    for method in (:compass, :bfgs_ad, :bfgs_analytic)
-        cs = HROC(F_start,F_stop;GLcheck=false,n_convexpoints=1000,maxlevel=10,polish=true,polish_method=method)
+    for optimizer in (CompassSearch(), BFGS(gradient=ADGradient()), BFGS(), Adam())
+        cs = HROC(F_start,F_stop;GLcheck=false,n_convexpoints=1000,maxlevel=10,polish=optimizer)
         buffer = build_buffer(cs)
         for F in (F_lam, F_stuck)
             bt = convexify(cs,buffer,W_KSD,F)
@@ -192,6 +192,9 @@ end
             @test abs(W_val - W_KSD_rc(F)) < 5e-6
         end
     end
+    # polish=true sugar maps to the default BFGS optimizer
+    @test HROC(F_start,F_stop;polish=true).polish isa BFGS
+    @test HROC(F_start,F_stop;polish=false).polish === nothing
 
     @testset "analytic gradient vs ForwardDiff" begin
         cs = HROC(F_start,F_stop;GLcheck=false,n_convexpoints=1000,maxlevel=10)

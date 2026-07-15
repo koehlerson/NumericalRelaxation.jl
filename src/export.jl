@@ -6,6 +6,13 @@ export
     HROC,
     BinaryLaminationTree,
     PolyConvexification,
+#polish optimizers
+    AbstractPolishOptimizer,
+    CompassSearch,
+    BFGS,
+    Adam,
+    AnalyticGradient,
+    ADGradient,
 #convexification buffers
     ConvexificationBuffer1D,
     AdaptiveConvexificationBuffer1D,
