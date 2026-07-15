@@ -196,6 +196,46 @@ end
     @test HROC(F_start,F_stop;polish=true).polish isa BFGS
     @test HROC(F_start,F_stop;polish=false).polish === nothing
 
+    @testset "rate-constrained polish" begin
+        # mimics the convexified-damage usage: convexify(btFₖ, btβₖ, cs, buffer, constraint, irr, W, F, material)
+        # with a RateConstraint-style predicate on β(F) = Ψ₀(C); the polish must never place a
+        # laminate state outside the constraint-admissible set and stays above the constrained optimum
+        cap = 0.01
+        Ψ₀(F) = 0.5*norm(F)^2
+        W_dmg(F, cap) = W_KSD(F)
+        function ratecon(prev_F, prev_β, F, cap)
+            β = Ψ₀(F)
+            for i in 1:length(prev_β.active)
+                (prev_β.active[i] && NumericalRelaxation.isleaf(prev_β, i)) || continue
+                β ≤ prev_β.nodes[i].F + cap && return true
+            end
+            return false
+        end
+        bndcheck(r, parent, F, cap) = Ψ₀(F) ≥ parent.F + cap - 1e-4
+        cs0 = HROC(F_start, F_stop; GLcheck=false, n_convexpoints=500, maxlevel=10)
+        buf0 = build_buffer(cs0)
+        btFₖ = convexify(cs0, buf0, W_dmg, Tensor{2,2}([0.15 0.05; 0.05 0.2]), cap)
+        βnodes = Vector{NumericalRelaxation.BinaryLaminationTreeNode{1,Float64,1}}(undef, length(btFₖ.nodes))
+        for i in 1:length(btFₖ.active)
+            btFₖ.active[i] || continue
+            n = btFₖ.nodes[i]
+            βnodes[i] = NumericalRelaxation.BinaryLaminationTreeNode(Ψ₀(n.F), 0.0, n.ξ, n.level)
+        end
+        btβₖ = NumericalRelaxation.BinaryLaminationTree{1,Float64,1}(βnodes, copy(btFₖ.active))
+        W_ref = Dict{String,Float64}()
+        for (name, polish) in (("discrete", nothing), ("bfgs", BFGS()), ("compass", CompassSearch()))
+            cs = HROC(F_start, F_stop; GLcheck=false, n_convexpoints=500, maxlevel=10, polish=polish)
+            buffer = build_buffer(cs)
+            btF = convexify(btFₖ, btβₖ, cs, buffer, ratecon, bndcheck, W_dmg, F_lam, cap)
+            𝔸, 𝐏, W_val = NumericalRelaxation.eval(btF, W_dmg, cap)
+            @test NumericalRelaxation.checkintegrity(btF)
+            @test all(ratecon(btFₖ, btβₖ, btF.nodes[i].F, cap) for i in 1:length(btF.active) if btF.active[i])
+            @test W_val ≥ W_KSD_rc(F_lam) - 1e-10 # rate cap binds: stays above the unconstrained envelope
+            W_ref[name] = W_val
+        end
+        @test W_ref["bfgs"] ≤ W_ref["discrete"] + 1e-12 # polish never worse than the discrete constrained tree
+    end
+
     @testset "analytic gradient vs ForwardDiff" begin
         cs = HROC(F_start,F_stop;GLcheck=false,n_convexpoints=1000,maxlevel=10)
         buffer = build_buffer(cs)
