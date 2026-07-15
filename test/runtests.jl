@@ -10,6 +10,18 @@ W(F::Tensor{2,1},x1=2,x2=6) = W(F[1],x1,x2)
 W_multi(F::Tensor{2,dim}) where dim = (norm(F)-1)^2
 W_multi_rc(F::Tensor{2,dim}) where dim = norm(F) ≤ 1 ? 0.0 : (norm(F)-1)^2
 
+# toy leaf objective, nonlinear in the measure: E(ν) = ⟨ν, W⟩ + ⟨ν, h⟩², with exact duals
+struct MeasureToyObjective{WF,HF} <: NumericalRelaxation.AbstractLeafObjective
+    W::WF
+    h::HF
+end
+(o::MeasureToyObjective)(leaves) = sum(l[2]*o.W(l[3]) for l in leaves) + sum(l[2]*o.h(l[3]) for l in leaves)^2
+function NumericalRelaxation.leafduals(o::MeasureToyObjective, leaves)
+    m = sum(l[2]*o.h(l[3]) for l in leaves)
+    return Dict(l[1] => (o.W(l[3]) + 2m*o.h(l[3]),
+                         Tensors.gradient(o.W, l[3]) + 2m*Tensors.gradient(o.h, l[3])) for l in leaves)
+end
+
 @testset "Equidistant Graham Scan" begin
     convexification = GrahamScan(start=0.01,stop=5.0,δ=0.01)
     buffer = build_buffer(convexification)
@@ -234,6 +246,38 @@ end
             W_ref[name] = W_val
         end
         @test W_ref["bfgs"] ≤ W_ref["discrete"] + 1e-12 # polish never worse than the discrete constrained tree
+    end
+
+    @testset "leaf objectives" begin
+        cs = HROC(F_start,F_stop;GLcheck=false,n_convexpoints=1000,maxlevel=10)
+        buffer = build_buffer(cs)
+        bt = convexify(cs,buffer,W_KSD,F_lam)
+        p, offsets = NumericalRelaxation.polish_parameters(bt; maxdepth=4)
+        p .*= 1 .+ 0.01*sin.(1:length(p))
+        admissible = NumericalRelaxation._admissible(cs)
+        h_toy(F) = norm(F)^2
+        obj = MeasureToyObjective(W_KSD, h_toy)
+        E = q -> NumericalRelaxation.polish_energy(obj, q, offsets, F_lam, admissible)
+        @test isfinite(E(p))
+        # analytic gradient vs central finite differences
+        g_an = NumericalRelaxation.polish_gradient!(zero(p), obj, p, offsets, F_lam, admissible)
+        δ = 1e-6
+        for k in eachindex(p)
+            q⁺ = copy(p); q⁺[k] += δ
+            q⁻ = copy(p); q⁻[k] -= δ
+            @test abs(g_an[k] - (E(q⁺) - E(q⁻))/(2δ)) < 1e-5*max(1.0, abs(g_an[k]))
+        end
+        # degenerate h ≡ 0 must reproduce the scalar-density gradient exactly
+        obj0 = MeasureToyObjective(W_KSD, F -> 0.0)
+        g0 = NumericalRelaxation.polish_gradient!(zero(p), obj0, p, offsets, F_lam, admissible)
+        g_scalar = zero(p)
+        NumericalRelaxation.polish_gradient!(g_scalar, p, offsets, F_lam, W_KSD)
+        @test maximum(abs, g0 .- g_scalar) < 1e-12
+        # BFGS on the leaf objective is monotone and reduces the energy
+        f0 = E(p)
+        pB = copy(p)
+        fB = NumericalRelaxation.polish_minimize!(BFGS(), obj, pB, offsets, F_lam, admissible)
+        @test fB ≤ f0 + 1e-12
     end
 
     @testset "analytic gradient vs ForwardDiff" begin

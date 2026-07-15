@@ -1538,8 +1538,12 @@ optimizer `opt`, which holds all hyperparameters. Every method is monotone: the 
 energy is never above the initial one.
 """
 function polish_minimize!(opt::CompassSearch, p::Vector{T}, offsets::Dict{Int,Int}, F::Tensor{2,dim,T}, admissible::AFUN, W::FUN, xargs::Vararg{Any,XN}) where {dim,T,AFUN,FUN,XN}
-    steptol = opt.steptol; maxsweeps = opt.maxsweeps
-    na = _nangles(Val(dim))
+    E = q -> polish_energy(q, offsets, 1, F, admissible, W, xargs...)
+    return _compass_core!(E, p, offsets, _nangles(Val(dim)), opt.steptol, opt.maxsweeps)
+end
+
+function _compass_core!(E::EFUN, p::Vector{T}, offsets::Dict{Int,Int}, na::Int, steptol, maxsweeps) where {EFUN,T}
+    isempty(p) && return E(p) # trivial tree: nothing to optimize
     steps = similar(p)
     for o in values(offsets)
         for k in 0:2na-1 # angles
@@ -1548,14 +1552,14 @@ function polish_minimize!(opt::CompassSearch, p::Vector{T}, offsets::Dict{Int,In
         steps[o+2na] = max(T(0.1)*abs(p[o+2na]), T(0.05))   # s⁻
         steps[o+2na+1] = max(T(0.1)*abs(p[o+2na+1]), T(0.05)) # s⁺
     end
-    f = polish_energy(p, offsets, 1, F, admissible, W, xargs...)
+    f = E(p)
     sweep = 0
     while maximum(steps) > steptol && sweep < maxsweeps
         improved = false
         for j in eachindex(p), s in (steps[j], -steps[j])
             pⱼ = p[j]
             p[j] = pⱼ + s
-            f_trial = polish_energy(p, offsets, 1, F, admissible, W, xargs...)
+            f_trial = E(p)
             if f_trial < f
                 f = f_trial
                 improved = true
@@ -1631,6 +1635,18 @@ end
 function polish_minimize!(opt::BFGS, p::Vector{T}, offsets::Dict{Int,Int}, F::Tensor{2,dim,T}, admissible::AFUN, W::FUN, xargs::Vararg{Any,XN}) where {dim,T,AFUN,FUN,XN}
     E = q -> polish_energy(q, offsets, 1, F, admissible, W, xargs...)
     grad! = _make_gradient(opt.gradient, E, p, offsets, F, W, xargs...)
+    f0 = E(p)
+    isfinite(f0) || return f0
+    f = _bfgs_core!(E, grad!, p, opt)
+    if !(f < f0) && opt.fallback !== nothing
+        # no progress from the initial point (e.g. seeded on a kink of a non-smooth W)
+        f = polish_minimize!(opt.fallback, p, offsets, F, admissible, W, xargs...)
+    end
+    return f
+end
+
+function _bfgs_core!(E::EFUN, grad!::GFUN, p::Vector{T}, opt::BFGS) where {EFUN,GFUN,T}
+    isempty(p) && return E(p) # trivial tree: nothing to optimize
     n = length(p)
     H = Matrix{T}(T(0.01)*I, n, n)
     g = zeros(T, n); g_new = zeros(T, n)
@@ -1667,10 +1683,6 @@ function polish_minimize!(opt::BFGS, p::Vector{T}, offsets::Dict{Int,Int}, F::Te
         end
         stall = (f - f_new) < 1e-14*max(one(T), abs(f)) ? stall + 1 : 0
         copyto!(p, p_new); f = f_new; copyto!(g, g_new)
-    end
-    if !(f < f0) && opt.fallback !== nothing
-        # no progress from the initial point (e.g. seeded on a kink of a non-smooth W)
-        f = polish_minimize!(opt.fallback, p, offsets, F, admissible, W, xargs...)
     end
     return f
 end
@@ -1808,6 +1820,129 @@ function polish_minimize!(opt::NonLocalNewton, p::Vector{T}, offsets::Dict{Int,I
         best_f = polish_minimize!(opt.finish, p, offsets, F, admissible, W, xargs...)
     end
     return best_f
+end
+
+####################################################
+############  Leaf-objective polishing  ############
+####################################################
+# Polishing of functionals that are NOT ξ-weighted integrals of a single scalar density,
+# e.g. cross-relaxation increments that couple the laminate to a history measure through
+# an optimal-transport pairing. The tree parametrization, the reverse gradient sweep and
+# the optimizers are reused; the objective supplies the energy of a leaf collection and,
+# for the analytic gradient, the per-leaf sensitivities with its internal minimizers
+# (transport plan, condensed internal variables, ...) frozen at their optimum (Danskin).
+
+@doc raw"""
+    AbstractLeafObjective
+Interface for polish objectives that are general functionals of the laminate
+`ν = Σᵢ ξᵢ δ_{Fᵢ}` instead of a ξ-weighted sum of one scalar density. An objective `obj`
+must implement
+- `(obj)(leaves)::Real` — the energy of the leaf collection, where `leaves` is a vector of
+  `(heapindex, ξᵢ, Fᵢ)` tuples as produced by [`polish_leaves!`](@ref);
+- `leafduals(obj, leaves)::Dict{Int,Tuple{T,Tensor{2,dim,T,N}}}` — for every heap index the
+  pair `(∂E/∂ξᵢ, ∂E/∂Fᵢ / ξᵢ)`, evaluated with all internal minimizers of the objective
+  frozen at their optimum (envelope theorem). For a transport-coupled objective `∂E/∂ξᵢ`
+  is the Kantorovich potential of leaf `i` (defined up to a constant, which cancels since
+  tree-parameter variations conserve the total mass).
+Use via `polish_minimize!(optimizer, obj, p, offsets, F, admissible)`.
+"""
+abstract type AbstractLeafObjective end
+
+"""
+    leafduals(obj::AbstractLeafObjective, leaves) -> Dict{Int,Tuple{T,Tensor{2,dim,T,N}}}
+Per-leaf sensitivities `(∂E/∂ξᵢ, ∂E/∂Fᵢ / ξᵢ)` of the objective, internal minimizers frozen.
+"""
+function leafduals end
+
+"""
+    polish_leaves!(out, p, offsets, i, F, w, admissible) -> Bool
+Collects the leaves `(heapindex, weight, F)` of the parametrized tree rooted at heap index `i`
+into `out`. Returns `false` (and stops) on inadmissible nodes or negative offsets, mirroring
+the penalty branches of [`polish_energy`](@ref).
+"""
+function polish_leaves!(out::Vector{Tuple{Int,T,Tensor{2,dim,T,N}}}, p::AbstractVector, offsets::Dict{Int,Int}, i::Int, F::Tensor{2,dim,T,N}, w::T, admissible::AFUN) where {dim,T,N,AFUN}
+    admissible(F) || return false
+    o = get(offsets, i, 0)
+    na = _nangles(Val(dim))
+    if o == 0 || p[o+2na] + p[o+2na+1] < 1e-12
+        push!(out, (i, w, F))
+        return true
+    end
+    θ𝐚 = ntuple(k->p[o+k-1], na)
+    θ𝐛 = ntuple(k->p[o+na+k-1], na)
+    s⁻ = p[o+2na]; s⁺ = p[o+2na+1]
+    (s⁻ < 0 || s⁺ < 0) && return false
+    𝐑 = _unitvec(Val(dim), θ𝐚) ⊗ _unitvec(Val(dim), θ𝐛)
+    ξ = s⁻/(s⁻ + s⁺)
+    polish_leaves!(out, p, offsets, minus_idx(i), F - s⁻*𝐑, w*(1-ξ), admissible) || return false
+    polish_leaves!(out, p, offsets, plus_idx(i), F + s⁺*𝐑, w*ξ, admissible) || return false
+    return true
+end
+
+function polish_energy(obj::AbstractLeafObjective, p::AbstractVector, offsets::Dict{Int,Int}, F::Tensor{2,dim,T,N}, admissible::AFUN) where {dim,T,N,AFUN}
+    leaves = Tuple{Int,T,Tensor{2,dim,T,N}}[]
+    polish_leaves!(leaves, p, offsets, 1, F, one(T), admissible) || return T(Inf)
+    return obj(leaves)
+end
+
+# reverse sweep as in _gradsweep!, but the leaf pairs (value-dual, stress-dual) come from the objective
+function _gradsweep_obj!(g::Vector{T}, p::Vector{T}, offsets::Dict{Int,Int}, i::Int, F::Tensor{2,dim,T}, w_anc::T, duals::Dict{Int,Tuple{T,Tensor{2,dim,T,N}}}) where {dim,T,N}
+    o = get(offsets, i, 0)
+    na = _nangles(Val(dim))
+    if o == 0 || p[o+2na] + p[o+2na+1] < 1e-12
+        return duals[i]
+    end
+    θ𝐚 = ntuple(k->p[o+k-1], na)
+    θ𝐛 = ntuple(k->p[o+na+k-1], na)
+    s⁻ = p[o+2na]; s⁺ = p[o+2na+1]
+    𝐚 = _unitvec(Val(dim), θ𝐚); 𝐛 = _unitvec(Val(dim), θ𝐛)
+    𝐑 = 𝐚 ⊗ 𝐛
+    ξ = s⁻/(s⁻ + s⁺)
+    S⁻, T⁻ = _gradsweep_obj!(g, p, offsets, minus_idx(i), F - s⁻*𝐑, w_anc*(1-ξ), duals)
+    S⁺, T⁺ = _gradsweep_obj!(g, p, offsets, plus_idx(i), F + s⁺*𝐑, w_anc*ξ, duals)
+    ∂ξ∂s⁻ = s⁺/(s⁻ + s⁺)^2
+    ∂ξ∂s⁺ = -s⁻/(s⁻ + s⁺)^2
+    𝐓θ = -s⁻*(1-ξ)*T⁻ + s⁺*ξ*T⁺
+    d𝐚 = _dunitvec(Val(dim), θ𝐚); d𝐛 = _dunitvec(Val(dim), θ𝐛)
+    for k in 1:na
+        g[o+k-1]    += w_anc * (𝐓θ ⊡ (d𝐚[k] ⊗ 𝐛))
+        g[o+na+k-1] += w_anc * (𝐓θ ⊡ (𝐚 ⊗ d𝐛[k]))
+    end
+    g[o+2na]   += w_anc * (∂ξ∂s⁻*(S⁺ - S⁻) - (1-ξ)*(T⁻ ⊡ 𝐑))
+    g[o+2na+1] += w_anc * (∂ξ∂s⁺*(S⁺ - S⁻) + ξ*(T⁺ ⊡ 𝐑))
+    return ξ*S⁺ + (1-ξ)*S⁻, ξ*T⁺ + (1-ξ)*T⁻
+end
+
+"""
+    polish_gradient!(g, obj::AbstractLeafObjective, p, offsets, F, admissible) -> g
+Analytic gradient of the leaf objective w.r.t. the tree parameters: one reverse sweep with the
+per-leaf sensitivities from [`leafduals`](@ref) (internal minimizers of the objective frozen).
+Assumes the current parameters are admissible (interior).
+"""
+function polish_gradient!(g::Vector{T}, obj::AbstractLeafObjective, p::Vector{T}, offsets::Dict{Int,Int}, F::Tensor{2,dim,T,N}, admissible::AFUN) where {dim,T,N,AFUN}
+    Base.fill!(g, zero(T))
+    leaves = Tuple{Int,T,Tensor{2,dim,T,N}}[]
+    polish_leaves!(leaves, p, offsets, 1, F, one(T), admissible) || return g
+    duals = leafduals(obj, leaves)
+    _gradsweep_obj!(g, p, offsets, 1, F, one(T), duals)
+    return g
+end
+
+function polish_minimize!(opt::CompassSearch, obj::AbstractLeafObjective, p::Vector{T}, offsets::Dict{Int,Int}, F::Tensor{2,dim,T}, admissible::AFUN) where {dim,T,AFUN}
+    E = q -> polish_energy(obj, q, offsets, F, admissible)
+    return _compass_core!(E, p, offsets, _nangles(Val(dim)), opt.steptol, opt.maxsweeps)
+end
+
+function polish_minimize!(opt::BFGS{AnalyticGradient}, obj::AbstractLeafObjective, p::Vector{T}, offsets::Dict{Int,Int}, F::Tensor{2,dim,T}, admissible::AFUN) where {dim,T,AFUN}
+    E = q -> polish_energy(obj, q, offsets, F, admissible)
+    grad! = (g, q) -> polish_gradient!(g, obj, q, offsets, F, admissible)
+    f0 = E(p)
+    isfinite(f0) || return f0
+    f = _bfgs_core!(E, grad!, p, opt)
+    if !(f < f0) && opt.fallback !== nothing
+        f = polish_minimize!(opt.fallback, obj, p, offsets, F, admissible)
+    end
+    return f
 end
 
 function _deactivate_subtree!(bt::BinaryLaminationTree, i::Int)

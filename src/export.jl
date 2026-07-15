@@ -14,6 +14,8 @@ export
     NonLocalNewton,
     AnalyticGradient,
     ADGradient,
+    AbstractLeafObjective,
+    leafduals,
 #convexification buffers
     ConvexificationBuffer1D,
     AdaptiveConvexificationBuffer1D,
