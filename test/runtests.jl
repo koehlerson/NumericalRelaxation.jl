@@ -2,6 +2,7 @@ using NumericalRelaxation
 using StaticArrays
 using Tensors
 using Test
+import ForwardDiff
 
 W(F::Number,x1=2,x2=6) = (F-1)^x1 * (42 + 77*F + 15*F^x1 - 102.5*F^3 + 58.89*F^4 - 12.89*F^5 + F^x2)
 W(F::Tensor{2,1},x1=2,x2=6) = W(F[1],x1,x2)
@@ -171,6 +172,40 @@ end
                 @test laminate.F⁻ == Tensor{2,dim}([0.0 0.0 0.0; 0.0 0.0 0.0; 1.0 0.0 0.0])
             end
         end
+    end
+end
+
+@testset "HROC polish" begin
+    W_KSD(F) = norm(F) ≥ √2 - 1 ? (1+norm(F)^2) : (2*√2*norm(F))
+    W_KSD_rc(F) = (ρ = sqrt(norm(F)^2 + 2*norm(det(F))); ρ ≥ 1 ? 1+norm(F)^2 : 2*(ρ - norm(det(F))))
+    F_start = ones(Tensor{2,2})*-3
+    F_stop  = ones(Tensor{2,2})*3
+    F_lam   = Tensor{2,2}([0.2 0.1; 0.1 0.3])     # greedy stage finds a lamination tree here
+    F_stuck = Tensor{2,2}([-0.35 0.0; 0.0 -0.45]) # greedy stage finds no laminate here (rank-two region)
+    for method in (:compass, :bfgs_ad, :bfgs_analytic)
+        cs = HROC(F_start,F_stop;GLcheck=false,n_convexpoints=1000,maxlevel=10,polish=true,polish_method=method)
+        buffer = build_buffer(cs)
+        for F in (F_lam, F_stuck)
+            bt = convexify(cs,buffer,W_KSD,F)
+            𝔸, 𝐏, W_val = NumericalRelaxation.eval(bt,W_KSD)
+            @test NumericalRelaxation.checkintegrity(bt)
+            @test abs(W_val - W_KSD_rc(F)) < 5e-6
+        end
+    end
+
+    @testset "analytic gradient vs ForwardDiff" begin
+        cs = HROC(F_start,F_stop;GLcheck=false,n_convexpoints=1000,maxlevel=10)
+        buffer = build_buffer(cs)
+        bt = convexify(cs,buffer,W_KSD,F_lam)
+        p, offsets = NumericalRelaxation.polish_parameters(bt)
+        p .*= 1 .+ 0.01*sin.(1:length(p)) # move off the discrete optimum, keep offsets positive
+        admissible = NumericalRelaxation._admissible(cs)
+        E = q -> NumericalRelaxation.polish_energy(q, offsets, 1, F_lam, admissible, W_KSD)
+        @test isfinite(E(p))
+        g_ad = ForwardDiff.gradient(E, p)
+        g_an = zero(p)
+        NumericalRelaxation.polish_gradient!(g_an, p, offsets, F_lam, W_KSD)
+        @test maximum(abs, g_ad .- g_an) < 1e-12
     end
 end
 

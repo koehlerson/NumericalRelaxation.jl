@@ -1,6 +1,7 @@
 module NumericalRelaxation
 
 using Tensors
+import ForwardDiff
 using StaticArrays
 using SparseArrays
 using AbstractTrees
