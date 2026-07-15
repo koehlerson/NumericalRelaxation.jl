@@ -247,6 +247,7 @@ polish_variants = [
     (BFGS(gradient=ADGradient()),    "BFGS-AD",       "orange!80!black"),
     (BFGS(),                         "BFGS-analytic", "blue!70!black"),
     (Adam(),                         "Adam+BFGS",     "green!55!black"),
+    (NonLocalNewton(),               "NL-Newton+BFGS", "violet!80!black"),
 ]
 Ns_polish = Int[10, 50, 100, 300, 500, 1000, 3000, 5000, 10_000]
 

@@ -11,6 +11,7 @@ export
     CompassSearch,
     BFGS,
     Adam,
+    NonLocalNewton,
     AnalyticGradient,
     ADGradient,
 #convexification buffers

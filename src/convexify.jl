@@ -1189,6 +1189,44 @@ end
     state = _xorshift(state)
     return state, 2.0*(state/typemax(UInt64)) - 1.0
 end
+# returns (new state, standard normal number) via Box-Muller
+@inline function _normrand(state::UInt64)
+    state, u1 = _unitrand(state)
+    state, u2 = _unitrand(state)
+    r = sqrt(-2*log(clamp(0.5*(u1 + 1), 1e-16, 1.0)))
+    return state, r*cospi(u2)
+end
+
+@doc raw"""
+    NonLocalNewton(; σ0=1.0, k=0, maxiter=100, σ_restart=1e-4, steptol=1e-4, ls_base=6/5, ls_range=10, seed=0x2545f4914f6cdd1d, finish=BFGS())
+Non-local quasi-Newton method of Müller,
+[*A Principle for Global Optimization with Gradients*](https://doi.org/10.1007/s10957-025-02848-5)
+(JOTA 2025, arXiv:2308.09556), as a polish optimizer. Instead of a local quadratic Taylor model,
+each iteration draws `k` Gaussian gradient samples `∇E(p + σₜ zⱼ)` (default `k = 3n`, the paper's
+choice) and fits a *non-local* quadratic model to them by symmetric least squares — the normal
+equations are the Lyapunov-type equation `M ẐẐᵀ + ẐẐᵀ M = ĜẐᵀ + ẐĜᵀ` of Corollary 2.1, solved
+by eigendecomposition. The search direction is the Newton step of that model (regularized when
+the model Hessian is indefinite, cf. Remark 1); the line search follows the paper and evaluates
+`p + (6/5)ⁱ Δp` and `p + (6/5)ⁱ (−b)` for `i ∈ -ls_range:ls_range`, the scaling σₜ is halved on
+small steps, set to half the step length on large steps and restarted at `σ0` below `σ_restart`.
+Because the fitted model averages gradients over a σ-sized neighbourhood, the direction can point
+across energy barriers that trap strictly local descent — the iteration itself is non-monotone,
+but the best parameters over all iterations are tracked and returned (and refined by `finish` if
+set), so the polished result is never worse than the discrete tree.
+Gradient samples use the smooth extension of the laminate energy (no feasibility penalties);
+the line search uses the true penalized energy, so accepted iterates remain admissible.
+"""
+Base.@kwdef struct NonLocalNewton <: AbstractPolishOptimizer
+    σ0::Float64 = 1.0
+    k::Int = 0 # 0 → 3n samples per iteration, following the paper's experiments
+    maxiter::Int = 100
+    σ_restart::Float64 = 1e-4
+    steptol::Float64 = 1e-4
+    ls_base::Float64 = 6/5
+    ls_range::Int = 10
+    seed::UInt64 = 0x2545f4914f6cdd1d
+    finish::Union{Nothing,BFGS} = BFGS()
+end
 
 @doc raw"""
     HROC{dimp,R1Dir<:RankOneDirections{dimp},T} <: AbstractConvexification
@@ -1690,6 +1728,88 @@ function polish_minimize!(opt::Adam, p::Vector{T}, offsets::Dict{Int,Int}, F::Te
     return best_f
 end
 
+function polish_minimize!(opt::NonLocalNewton, p::Vector{T}, offsets::Dict{Int,Int}, F::Tensor{2,dim,T}, admissible::AFUN, W::FUN, xargs::Vararg{Any,XN}) where {dim,T,AFUN,FUN,XN}
+    E = q -> polish_energy(q, offsets, 1, F, admissible, W, xargs...)
+    n = length(p)
+    k = opt.k > 0 ? opt.k : 3n
+    Z = zeros(T, n, k); G = zeros(T, n, k)
+    g = zeros(T, n)
+    x = copy(p)
+    best_p = copy(p)
+    best_f = E(p)
+    σ = opt.σ0
+    state = opt.seed
+    for _ in 1:opt.maxiter
+        # sample a σ-neighbourhood of x and collect gradients of the smooth extension
+        nvalid = 0
+        for j in 1:k
+            for i in 1:n
+                state, zij = _normrand(state)
+                Z[i, j] = zij
+            end
+            q = x .+ σ .* @view(Z[:, j])
+            ok = try
+                polish_gradient!(g, q, offsets, F, W, xargs...)
+                all(isfinite, g)
+            catch
+                false
+            end
+            ok || (Z[:, j] .= zero(T); G[:, j] .= zero(T); continue)
+            G[:, j] .= g
+            nvalid += 1
+        end
+        nvalid ≥ 2 || break # neighbourhood not evaluable: give up on the non-local model
+        # symmetric least-squares fit of the non-local quadratic model (Corollary 2.1):
+        # M ẐẐᵀ + ẐẐᵀ M = ĜẐᵀ + ẐĜᵀ, b = ḡ - M z̄, solved via eigendecomposition
+        z̄ = sum(Z, dims=2) ./ k
+        ḡ = sum(G, dims=2) ./ k
+        Ẑ = Z .- z̄; Ĝ = G .- ḡ
+        P = Symmetric(Ẑ*Ẑ')
+        R = Ĝ*Ẑ'; R = R + R'
+        eig = eigen(P)
+        R̃ = eig.vectors' * R * eig.vectors
+        M̃ = similar(R̃)
+        for i in 1:n, j in 1:n
+            λ = eig.values[i] + eig.values[j]
+            M̃[i, j] = λ > 1e-12 ? R̃[i, j]/λ : zero(T)
+        end
+        M = Symmetric(eig.vectors * M̃ * eig.vectors')
+        b = vec(ḡ) .- M*vec(z̄)
+        # Newton step of the non-local model; regularized when indefinite (Remark 1)
+        λmin = eigmin(M)
+        Δ = -(M + (λmin > 0 ? zero(T) : (-λmin + T(1e-8)*max(one(T), abs(λmin))))*I) \ b
+        # paper line search: log grid over both candidate directions
+        f_move = T(Inf); x_move = x
+        for d in (Δ, -b), i in -opt.ls_range:opt.ls_range
+            x_trial = x .+ opt.ls_base^i .* d
+            f_trial = E(x_trial)
+            isfinite(f_trial) || continue
+            f_trial < f_move && ((f_move, x_move) = (f_trial, x_trial))
+        end
+        steplen = isfinite(f_move) ? norm(x_move .- x) : zero(T)
+        if isfinite(f_move)
+            x = x_move # non-monotone iteration, the best iterate is tracked separately
+            if f_move < best_f
+                best_f = f_move
+                copyto!(best_p, x)
+            end
+        end
+        # scaling adaption of the paper
+        if σ < opt.σ_restart
+            σ = opt.σ0
+        elseif steplen < opt.steptol
+            σ /= 2
+        elseif steplen > 2σ
+            σ = steplen/2
+        end
+    end
+    copyto!(p, best_p)
+    if opt.finish !== nothing
+        best_f = polish_minimize!(opt.finish, p, offsets, F, admissible, W, xargs...)
+    end
+    return best_f
+end
+
 function _deactivate_subtree!(bt::BinaryLaminationTree, i::Int)
     i ≤ length(bt.active) || return nothing
     bt.active[i] || return nothing
@@ -2080,7 +2200,12 @@ function checkintegrity(tree::BinaryLaminationTree,tol=1e-4)
         pi = plus_idx(i)
         points = [tree.nodes[mi].F, tree.nodes[pi].F]
         weights = [tree.nodes[mi].ξ, tree.nodes[pi].ξ]
-        isintegre = isapprox(F,sum(points .* weights),atol=tol) && rank(points[2] - points[1]) < 2
+        # rank-one connectivity checked on the normalized direction with a cancellation-aware
+        # tolerance: for splits of small width h the direction computed from the stored endpoints
+        # carries relative rounding noise of order eps·|F|/h, which the default rank tolerance flags
+        Δ = points[2] - points[1]
+        rankone = norm(Δ) < tol || rank(Δ / norm(Δ), rtol=sqrt(eps(Float64))) < 2
+        isintegre = isapprox(F,sum(points .* weights),atol=tol) && rankone
         if !isintegre
             break
         end
