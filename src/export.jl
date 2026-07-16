@@ -16,6 +16,8 @@ export
     ADGradient,
     AbstractLeafObjective,
     leafduals,
+    LabeledDensity,
+    LabeledConstraint,
 #convexification buffers
     ConvexificationBuffer1D,
     AdaptiveConvexificationBuffer1D,

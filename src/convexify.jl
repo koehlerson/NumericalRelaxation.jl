@@ -1406,7 +1406,7 @@ function BinaryLaminationTree(prev_F,prev_bt::BinaryLaminationTree, convexificat
     diss_offset = 0.0
     # CE at root level only: prefer the previous root direction if it still gives energy reduction.
     root_prev_direction = haschildren(prev_F, 1) ? rankonedir(prev_F, 1) : zero(typeof(F))
-    laminate = hrockernel(root_prev_direction,prev_F,prev_bt,bt,convexification,buffer,constraint,diss_offset,W,F,xargs...)
+    laminate = hrockernel(root_prev_direction,prev_F,prev_bt,1,bt,convexification,buffer,constraint,diss_offset,W,F,xargs...)
     if laminate === nothing
         return bt
     end
@@ -1428,15 +1428,17 @@ function BinaryLaminationTree(prev_F,prev_bt::BinaryLaminationTree, convexificat
             # Continuity enforcement disabled — global search at child level.
             # prev_direction⁺ = haschildren(prev_F, prev_plus_idx) ? rankonedir(prev_F, prev_plus_idx) : rankonedir(bt, pidx)
             # prev_direction⁻ = haschildren(prev_F, prev_minus_idx) ? rankonedir(prev_F, prev_minus_idx) : rankonedir(bt, pidx)
-            laminate⁺ = hrockernel(zero(F),prev_F,prev_bt,bt,convexification,buffer,constraint,diss_offset,W,lc.F⁺,xargs...)
-            laminate⁻ = hrockernel(zero(F),prev_F,prev_bt,bt,convexification,buffer,constraint,diss_offset,W,lc.F⁻,xargs...)
+            laminate⁺ = hrockernel(zero(F),prev_F,prev_bt,prev_plus_idx,bt,convexification,buffer,constraint,diss_offset,W,lc.F⁺,xargs...)
+            laminate⁻ = hrockernel(zero(F),prev_F,prev_bt,prev_minus_idx,bt,convexification,buffer,constraint,diss_offset,W,lc.F⁻,xargs...)
             !irr(constraint,NodeView(prev_bt,prev_pidx),lc.F⁺,xargs...) && !(laminate⁺ === nothing) && push!(queue,(plus_idx(pidx), laminate⁺, prev_plus_idx))
             !irr(constraint,NodeView(prev_bt,prev_pidx),lc.F⁻,xargs...) && !(laminate⁻ === nothing) && push!(queue,(minus_idx(pidx), laminate⁻, prev_minus_idx))
         end
     end
     if convexification.polish !== nothing
-        admissible = 𝐱 -> _admissible(convexification)(𝐱) && constraint(prev_F,prev_bt,𝐱,xargs...)
-        polish!(bt, convexification, buffer, admissible, W, F, xargs...)
+        # NOTE: with labeled densities/constraints the polish uses the root label as a fallback
+        admissible = 𝐱 -> _admissible(convexification)(𝐱) && _eval_constraint(constraint, prev_F, prev_bt, 1, 𝐱, xargs...)
+        Wp = W isa LabeledDensity ? (𝐱, args...) -> W.f(𝐱, NodeView(prev_bt, 1), args...) : W
+        polish!(bt, convexification, buffer, admissible, Wp, F, xargs...)
     end
     return bt
 end
@@ -2169,9 +2171,37 @@ function hrockernel(root::BinaryLaminationTree, convexification::HROC, buffer::H
     return laminate
 end
 
-function hrockernel(prev_direction,prev_F,prev::BinaryLaminationTree, root::BinaryLaminationTree, convexification::HROC, buffer::HROCBuffer, constraint, diss_offset, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
-    W_ref = W(F,xargs...)
-    𝔸_ref, _, W_glob_ref = eval(root,W,xargs...)
+@doc raw"""
+    LabeledDensity(f)
+Wraps an incremental density for the constrained (cross) convexification whose value depends on
+the matched node of the previous internal-variable tree: the synchronized descent of the
+constrained constructor forwards the matched `NodeView` and the density is evaluated as
+`f(𝐱, node, xargs...)`. This realizes label-inherited (tree-lineage) transport: every branch of
+the new laminate is condensed against the history of its matched previous phase, which conserves
+the previous measure's masses by construction.
+"""
+struct LabeledDensity{F}
+    f::F
+end
+
+@doc raw"""
+    LabeledConstraint(f)
+Wraps an admissibility predicate for the constrained convexification that is tested against the
+matched node of the previous internal-variable tree instead of the whole tree:
+`f(prev_F, prev, node, 𝐱, xargs...)`. Replaces the disjunction over all previous leaves (which
+ignores mass conservation of the history measure) by the label-inherited test.
+"""
+struct LabeledConstraint{F}
+    f::F
+end
+
+@inline _eval_density(W::LabeledDensity, 𝐱, prev, prev_idx, xargs...) = W.f(𝐱, NodeView(prev, prev_idx), xargs...)
+@inline _eval_density(W, 𝐱, prev, prev_idx, xargs...) = W(𝐱, xargs...)
+@inline _eval_constraint(c::LabeledConstraint, prev_F, prev, prev_idx, 𝐱, xargs...) = c.f(prev_F, prev, NodeView(prev, prev_idx), 𝐱, xargs...)
+@inline _eval_constraint(c, prev_F, prev, prev_idx, 𝐱, xargs...) = c(prev_F, prev, 𝐱, xargs...)
+
+function hrockernel(prev_direction,prev_F,prev::BinaryLaminationTree, prev_idx::Int, root::BinaryLaminationTree, convexification::HROC, buffer::HROCBuffer, constraint, diss_offset, W::FUN, F::Tensor{2,dim,T,N}, xargs::Vararg{Any,XN}) where {dim,T,N,FUN,XN}
+    W_ref = _eval_density(W, F, prev, prev_idx, xargs...)
     laminate = nothing
     # CE: try prev_direction first (only active when non-zero, i.e. at root level).
     # Children pass zero(F), so the iszero guard skips it there → free search at child level.
@@ -2191,8 +2221,8 @@ function hrockernel(prev_direction,prev_F,prev::BinaryLaminationTree, root::Bina
                     𝐱 = F # init dir
                     ell = 0 # start at 0
                 end
-                while inbounds(𝐱,convexification) && (convexification.GLcheck ? det(𝐱) > 1e-6 : true) && constraint(prev_F,prev,𝐱,xargs...)
-                    val = W(𝐱,xargs...)
+                while inbounds(𝐱,convexification) && (convexification.GLcheck ? det(𝐱) > 1e-6 : true) && _eval_constraint(constraint, prev_F, prev, prev_idx, 𝐱, xargs...)
+                    val = _eval_density(W, 𝐱, prev, prev_idx, xargs...)
                     if dir == 1
                         buffer.forward_initial.values[ctr_fw+1] = val
                         buffer.forward_initial.grid[ctr_fw+1] = ell
@@ -2213,14 +2243,11 @@ function hrockernel(prev_direction,prev_F,prev::BinaryLaminationTree, root::Bina
                 l₂ = buffer.convex.grid[j]
                 F⁻ = F + l₁*𝐀
                 F⁺ = F + l₂*𝐀
-                W⁻ = W(F⁻,xargs...)
-                W⁺ = W(F⁺,xargs...)
+                W⁻ = _eval_density(W, F⁻, prev, prev_idx, xargs...)
+                W⁺ = _eval_density(W, F⁺, prev, prev_idx, xargs...)
                 lc = Laminate(F⁻,F⁺,W⁻,W⁺,𝐀,0)
-                𝔸, _, W_glob_trial = eval(root,F,lc,W,xargs...)
                 if (Wᶜ <= W_ref)
                     W_ref = Wᶜ
-                    𝔸_ref = 𝔸
-                    W_glob_ref = W_glob_trial
                     laminate = lc
                     try_prev && return laminate  # CE: root prev direction works — accept immediately
                 end
