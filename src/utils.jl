@@ -41,6 +41,33 @@ Tensors.Tensor{order,1,T,1}(x::T) where {order,T} = Tensor{order,1}((x,))
 ####################################################
 ####################################################
 
+# Reusable scratch for the tree polish (BFGS + parameter extraction): every temporary the
+# optimizer previously allocated per iteration lives here, sized to the largest parameter
+# count seen. Owned by the (per-thread) HROCBuffer, so shared-BFGS-struct threading is safe.
+mutable struct PolishWorkspace{T}
+    H::Matrix{T}
+    g::Vector{T}; g_new::Vector{T}
+    d::Vector{T}; ptrial::Vector{T}; p_new::Vector{T}
+    s::Vector{T}; y::Vector{T}; Hy::Vector{T}
+    p::Vector{T}                 # parameter vector filled by polish_parameters!
+    offsets::Dict{Int,Int}
+end
+PolishWorkspace{T}() where T = PolishWorkspace{T}(Matrix{T}(undef,0,0),
+    T[], T[], T[], T[], T[], T[], T[], T[], T[], Dict{Int,Int}())
+
+function ensure_polish!(ws::PolishWorkspace{T}, n::Int) where T
+    size(ws.H, 1) < n && (ws.H = Matrix{T}(undef, n, n))
+    length(ws.g) == n || resize!(ws.g, n)
+    length(ws.g_new) == n || resize!(ws.g_new, n)
+    length(ws.d) == n || resize!(ws.d, n)
+    length(ws.ptrial) == n || resize!(ws.ptrial, n)
+    length(ws.p_new) == n || resize!(ws.p_new, n)
+    length(ws.s) == n || resize!(ws.s, n)
+    length(ws.y) == n || resize!(ws.y, n)
+    length(ws.Hy) == n || resize!(ws.Hy, n)
+    return ws
+end
+
 struct HROCBuffer{T1,T2} <: AbstractConvexificationBuffer
     #concat array for rank-one line convexification input
     initial::ConvexificationBuffer1D{T1,T2}
@@ -50,7 +77,11 @@ struct HROCBuffer{T1,T2} <: AbstractConvexificationBuffer
     backward_initial::ConvexificationBuffer1D{T1,T2}
     forward_convex::ConvexificationBuffer1D{T1,T2}
     backward_convex::ConvexificationBuffer1D{T1,T2}
+    polish_ws::PolishWorkspace{T2}
 end
+# positional back-compat: buffers built without an explicit workspace get a fresh one
+HROCBuffer(a::ConvexificationBuffer1D{T1,T2}, b, c, d, e, f) where {T1,T2} =
+    HROCBuffer(a, b, c, d, e, f, PolishWorkspace{T2}())
 
 function fill!(baltbuffer::HROCBuffer{T1,T2}) where {T1,T2}
     Base.fill!(baltbuffer.initial.grid,zero(T1))

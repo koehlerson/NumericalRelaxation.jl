@@ -1487,9 +1487,21 @@ line-grid resolution, and carrying that redundant, degenerate parametrization in
 optimization deteriorates convergence — a shallow tree with jointly optimal parameters
 represents the same (or a better) laminate.
 """
+# buffered variant: fills ws.p / ws.offsets in place (capacities are retained across calls)
+function polish_parameters!(ws::PolishWorkspace{T}, bt::BinaryLaminationTree{dim,T}; maxdepth::Int=typemax(Int)) where {dim,T}
+    empty!(ws.p); empty!(ws.offsets)
+    _polish_parameters_body!(ws.p, ws.offsets, bt, maxdepth)
+    return ws.p, ws.offsets
+end
+
 function polish_parameters(bt::BinaryLaminationTree{dim,T}; maxdepth::Int=typemax(Int)) where {dim,T}
     offsets = Dict{Int,Int}()
     p = T[]
+    _polish_parameters_body!(p, offsets, bt, maxdepth)
+    return p, offsets
+end
+
+function _polish_parameters_body!(p::Vector{T}, offsets::Dict{Int,Int}, bt::BinaryLaminationTree{dim,T}, maxdepth::Int) where {dim,T}
     for i in 1:length(bt.active)
         (bt.active[i] && haschildren(bt, i) && _heapdepth(i) ≤ maxdepth) || continue
         F0 = bt.nodes[i].F
@@ -1505,7 +1517,7 @@ function polish_parameters(bt::BinaryLaminationTree{dim,T}; maxdepth::Int=typema
         push!(p, _angles(𝐛)...)
         push!(p, norm(F0 - F⁻), norm(F⁺ - F0))
     end
-    return p, offsets
+    return nothing
 end
 
 """
@@ -1634,12 +1646,12 @@ function _make_gradient(::ADGradient, E::EFUN, p::Vector, offsets::Dict{Int,Int}
     return (g, q) -> ForwardDiff.gradient!(g, E, q, cfg)
 end
 
-function polish_minimize!(opt::BFGS, p::Vector{T}, offsets::Dict{Int,Int}, F::Tensor{2,dim,T}, admissible::AFUN, W::FUN, xargs::Vararg{Any,XN}) where {dim,T,AFUN,FUN,XN}
+function polish_minimize!(opt::BFGS, p::Vector{T}, offsets::Dict{Int,Int}, F::Tensor{2,dim,T}, admissible::AFUN, W::FUN, xargs::Vararg{Any,XN}; ws::Union{Nothing,PolishWorkspace{T}}=nothing) where {dim,T,AFUN,FUN,XN}
     E = q -> polish_energy(q, offsets, 1, F, admissible, W, xargs...)
     grad! = _make_gradient(opt.gradient, E, p, offsets, F, W, xargs...)
     f0 = E(p)
     isfinite(f0) || return f0
-    f = _bfgs_core!(E, grad!, p, opt)
+    f = _bfgs_core!(E, grad!, p, opt; ws=ws)
     if !(f < f0) && opt.fallback !== nothing
         # no progress from the initial point (e.g. seeded on a kink of a non-smooth W)
         f = polish_minimize!(opt.fallback, p, offsets, F, admissible, W, xargs...)
@@ -1647,11 +1659,20 @@ function polish_minimize!(opt::BFGS, p::Vector{T}, offsets::Dict{Int,Int}, F::Te
     return f
 end
 
-function _bfgs_core!(E::EFUN, grad!::GFUN, p::Vector{T}, opt::BFGS) where {EFUN,GFUN,T}
+function _bfgs_core!(E::EFUN, grad!::GFUN, p::Vector{T}, opt::BFGS; ws::Union{Nothing,PolishWorkspace{T}}=nothing) where {EFUN,GFUN,T}
     isempty(p) && return E(p) # trivial tree: nothing to optimize
     n = length(p)
-    H = Matrix{T}(T(0.01)*I, n, n)
-    g = zeros(T, n); g_new = zeros(T, n)
+    # every temporary lives in the workspace (per-thread via HROCBuffer): the previous
+    # version allocated d = -H*g, one p .+ α.*d per line-search trial, p_new/s/y and five
+    # matrix temporaries for the H update — per BFGS iteration (~90% of the sweep's
+    # allocations). ws === nothing keeps the old standalone behavior.
+    w = ws === nothing ? PolishWorkspace{T}() : ws
+    ensure_polish!(w, n)
+    H = w.H; g = w.g; g_new = w.g_new; d = w.d; ptrial = w.ptrial
+    p_new = w.p_new; sv = w.s; y = w.y; u = w.Hy
+    @inbounds for j in 1:n, i in 1:n              # H backing may exceed n: index within n
+        H[i, j] = ifelse(i == j, T(0.01), zero(T))
+    end
     f0 = E(p)
     isfinite(f0) || return f0
     f = f0
@@ -1660,14 +1681,19 @@ function _bfgs_core!(E::EFUN, grad!::GFUN, p::Vector{T}, opt::BFGS) where {EFUN,
     for _ in 1:opt.maxiter
         maximum(abs, g) < opt.gtol && break
         stall ≥ opt.stalliter && break # energy stagnated: converged or non-smooth kink
-        d = -H*g
+        _negmul_n!(d, H, g, n)
         if dot(d, g) ≥ 0 # not a descent direction: reset curvature
-            H .= Matrix{T}(T(0.01)*I, n, n)
-            d = -H*g
+            @inbounds for j in 1:n, i in 1:n
+                H[i, j] = ifelse(i == j, T(0.01), zero(T))
+            end
+            _negmul_n!(d, H, g, n)
         end
         α = one(T); f_new = T(Inf); accepted = false
         for _ in 1:opt.ls_maxiter
-            f_new = E(p .+ α.*d)
+            @inbounds for i in 1:n
+                ptrial[i] = p[i] + α*d[i]
+            end
+            f_new = E(ptrial)
             if isfinite(f_new) && f_new ≤ f + T(opt.c_armijo)*α*dot(g, d)
                 accepted = true
                 break
@@ -1675,18 +1701,44 @@ function _bfgs_core!(E::EFUN, grad!::GFUN, p::Vector{T}, opt::BFGS) where {EFUN,
             α /= 2
         end
         accepted || break # line search failed (kink or stationary point)
-        p_new = p .+ α.*d
+        copyto!(p_new, ptrial)                     # the accepted point
         grad!(g_new, p_new)
-        s = p_new .- p; y = g_new .- g
-        sy = dot(s, y)
-        if sy > 1e-12*norm(s)*norm(y) # curvature condition, else skip update
+        @inbounds for i in 1:n
+            sv[i] = p_new[i] - p[i]; y[i] = g_new[i] - g[i]
+        end
+        sy = dot(sv, y)
+        if sy > 1e-12*norm(sv)*norm(y) # curvature condition, else skip update
             ρ = 1/sy
-            H .= (I - ρ*s*y')*H*(I - ρ*y*s') .+ ρ*s*s'
+            # in-place BFGS: H ← H − ρ s uᵀ − ρ u sᵀ + (ρ²(yᵀu) + ρ) s sᵀ with u = H y
+            _mul_n!(u, H, y, n)
+            c = ρ*ρ*dot(y, u) + ρ
+            @inbounds for j in 1:n, i in 1:n
+                H[i, j] += -ρ*(sv[i]*u[j] + u[i]*sv[j]) + c*sv[i]*sv[j]
+            end
         end
         stall = (f - f_new) < 1e-14*max(one(T), abs(f)) ? stall + 1 : 0
         copyto!(p, p_new); f = f_new; copyto!(g, g_new)
     end
     return f
+end
+
+# tiny hand-rolled mat-vecs with explicit n (the H backing may be larger than n; n ≤ ~12)
+@inline function _mul_n!(u, H, v, n::Int)
+    @inbounds for i in 1:n
+        acc = 0.0
+        for j in 1:n
+            acc += H[i, j]*v[j]
+        end
+        u[i] = acc
+    end
+    return u
+end
+@inline function _negmul_n!(u, H, v, n::Int)
+    _mul_n!(u, H, v, n)
+    @inbounds for i in 1:n
+        u[i] = -u[i]
+    end
+    return u
 end
 
 function polish_minimize!(opt::Adam, p::Vector{T}, offsets::Dict{Int,Int}, F::Tensor{2,dim,T}, admissible::AFUN, W::FUN, xargs::Vararg{Any,XN}) where {dim,T,AFUN,FUN,XN}
@@ -1998,8 +2050,8 @@ example). Enabled via the `polish` option of [`HROC`](@ref).
 """
 function polish!(bt::BinaryLaminationTree{dim,T}, convexification::HROC, buffer::HROCBuffer, admissible::AFUN, W::FUN, F::Tensor{2,dim,T}, xargs::Vararg{Any,XN}; maxdepth::Int=4) where {dim,T,AFUN,FUN,XN}
     if haschildren(bt, 1)
-        p, offsets = polish_parameters(bt; maxdepth=maxdepth)
-        polish_minimize!(convexification.polish, p, offsets, F, admissible, W, xargs...)
+        p, offsets = polish_parameters!(buffer.polish_ws, bt; maxdepth=maxdepth)
+        polish_minimize!(convexification.polish, p, offsets, F, admissible, W, xargs...; ws=buffer.polish_ws)
         polish_apply!(bt, p, offsets, 1, F, bt.nodes[1].ξ, W, xargs...)
     else
         polish_speculate!(bt, convexification, buffer, admissible, W, F, xargs...)
@@ -2065,7 +2117,7 @@ function polish_speculate!(bt::BinaryLaminationTree{dim,T,N}, convexification::H
             f < f_init && ((p_init, f_init) = (p, f))
         end
         isempty(p_init) && continue
-        f = polish_minimize!(convexification.polish, p_init, offsets, F, admissible, W, xargs...)
+        f = polish_minimize!(convexification.polish, p_init, offsets, F, admissible, W, xargs...; ws=buffer.polish_ws)
         f < best_f && ((best_f, best_p) = (f, p_init))
     end
     best_f < W_ref || return bt # speculation did not improve upon W(F): keep the trivial tree
